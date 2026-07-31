@@ -1,0 +1,746 @@
+commit-msg: tune(48h): review-gate markdown verdict parser + hermes-python runtime + auto_tts=false + preflight baseline
+timestamp: 2026-07-31T20:11:06+08:00
+sha256: 8d0ae128ae9d
+scope: personal hermes-fleet patch archive (not a fork of NousResearch/hermes-agent)
+
+=== WHY ===
+- OpenCode/Pi often emit **Verdict: PASS** / ### Verdict\n**PASS**; old regex false-negative BLOCKED
+- 48h long-horizon prefers silent background: voice.auto_tts=false
+- Homebrew python3.14 is externally-managed; cron/scripts must use Hermes venv Python 3.11
+- 48h start needs durable preflight baseline (gateway/cron/kanban/Anchor/git dirty)
+
+=== LIVE PATHS ===
+- ~/.hermes/skills/software-development/review-gate/scripts/{l2_from_opencode,l3_from_pi,test_review_gate}.py
+- ~/.hermes/bin/hermes-python
+- ~/.hermes/scripts/cron_{watchdog,checkpoint,wiki_lint}.sh
+- ~/.hermes/scripts/README-runtime.md
+- ~/.hermes/config.yaml voice.auto_tts=false
+- ~/.hermes/artifacts/verify-report-2026-07-31/{REPORT.md,preflight-baseline.md}
+
+=== PATCH (review-gate explicit_verdict) ===
+--- a/explicit_verdict
++++ b/explicit_verdict
+    patterns = [
+        r"(?im)^\s*(?:VERDICT|RECOMMENDATION|FINAL(?:_RECOMMENDATION)?)\s*[:=-]\s*\*{0,2}(PASS_WITH_NOTES|CHANGES_REQUIRED|BLOCKED|PASS)\*{0,2}\b",
+        r"(?im)^\s*\*{0,2}(PASS_WITH_NOTES|CHANGES_REQUIRED|BLOCKED|PASS)\*{0,2}\b",
+    ]
+---
+    patterns = [
+        r"(?im)^\s*\*{0,2}\s*(?:VERDICT|RECOMMENDATION|FINAL(?:_RECOMMENDATION)?)\s*\*{0,2}\s*[:=-]\s*\*{0,2}(PASS_WITH_NOTES|CHANGES_REQUIRED|BLOCKED|PASS)\*{0,2}\b",
+        r"(?im)^\s*\*{0,2}\s*(PASS_WITH_NOTES|CHANGES_REQUIRED|BLOCKED|PASS)\s*\*{0,2}\s*$",
+    ]
+
+FFF..
+======================================================================
+FAIL: test_high_route (__main__.ReviewGateTests.test_high_route)
+Traceback (most recent call last):
+  File "/Users/henry/scratch/hermes-fleet/scripts/review-gate/test_review_gate.py", line 70, in test_high_route
+    self.assertEqual(r.returncode, 0, r.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+======================================================================
+FAIL: test_l2_schema_requires_evidence (__main__.ReviewGateTests.test_l2_schema_requires_evidence)
+Traceback (most recent call last):
+  File "/Users/henry/scratch/hermes-fleet/scripts/review-gate/test_review_gate.py", line 115, in test_l2_schema_requires_evidence
+    self.assertIn("path:line", r.stdout + r.stderr)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+======================================================================
+FAIL: test_low_route (__main__.ReviewGateTests.test_low_route)
+Traceback (most recent call last):
+  File "/Users/henry/scratch/hermes-fleet/scripts/review-gate/test_review_gate.py", line 44, in test_low_route
+    self.assertEqual(r.returncode, 0, r.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+
+
+=== CONFIG NOTE (not committed as secret) ===
+voice.auto_tts: true -> false  (no keys, no .env)
+
+=== FILES ===
+- scripts/review-gate/l2_from_opencode.py (6582 bytes)
+- scripts/review-gate/l3_from_pi.py (7406 bytes)
+- scripts/review-gate/test_review_gate.py (4564 bytes)
+- scripts/review-gate/review_gate.py (5178 bytes)
+- scripts/bin/hermes-python (284 bytes)
+- scripts/cron/cron_watchdog.sh (1072 bytes)
+- scripts/cron/cron_checkpoint.sh (1086 bytes)
+- scripts/cron/cron_wiki_lint.sh (705 bytes)
+- scripts/README-runtime.md (285 bytes)
+
+=== FULL FILE: scripts/review-gate/l2_from_opencode.py ===
+#!/usr/bin/env python3
+"""Normalize OpenCode JSONL output into a review-gate L2 report."""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+REVIEW_ROOT = Path.home() / ".hermes" / "artifacts" / "review"
+RG = Path.home() / ".hermes" / "skills" / "software-development" / "review-gate" / "scripts" / "review_gate.py"
+VERDICTS = ("PASS_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "PASS")
+
+
+def parse_stream(path: Path) -> tuple[str, bool, list[str]]:
+    texts: list[str] = []
+    errors: list[str] = []
+    terminal_stop = False
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        typ = obj.get("type")
+        part = obj.get("part") or {}
+        if typ == "text" and part.get("type") == "text" and part.get("text"):
+            texts.append(part["text"].strip())
+        if typ == "tool_use":
+            state = part.get("state") or {}
+            if state.get("status") == "error":
+                errors.append(str(state.get("error") or "tool error"))
+        if typ == "step_finish" and part.get("reason") == "stop":
+            terminal_stop = True
+    return "\n\n".join(t for t in texts if t).strip(), terminal_stop, errors
+
+
+def explicit_verdict(text: str) -> str | None:
+    patterns = [
+        r"(?im)^\s*\*{0,2}\s*(?:VERDICT|RECOMMENDATION|FINAL(?:_RECOMMENDATION)?)\s*\*{0,2}\s*[:=-]\s*\*{0,2}(PASS_WITH_NOTES|CHANGES_REQUIRED|BLOCKED|PASS)\*{0,2}\b",
+        r"(?im)^\s*\*{0,2}\s*(PASS_WITH_NOTES|CHANGES_REQUIRED|BLOCKED|PASS)\s*\*{0,2}\s*$",
+    ]
+    matches: list[str] = []
+    for pattern in patterns:
+        matches.extend(re.findall(pattern, text))
+    return matches[-1].upper() if matches else None
+
+
+def findings_from_text(text: str, incomplete: bool, errors: list[str]) -> list[dict]:
+    evidence = list(dict.fromkeys(re.findall(r"[A-Za-z0-9_./~-]+\.[A-Za-z0-9]+:\d+(?:-\d+)?", text)))
+    findings: list[dict] = []
+    severity_patterns = [
+        ("high", r"(?im)^\s*(?:[-*]|\d+[.)])?\s*\**(?:critical|high)\**\s*[-—:]\s*(.+)$"),
+        ("medium", r"(?im)^\s*(?:[-*]|\d+[.)])?\s*\**medium\**\s*[-—:]\s*(.+)$"),
+        ("low", r"(?im)^\s*(?:[-*]|\d+[.)])?\s*\**low\**\s*[-—:]\s*(.+)$"),
+    ]
+    for severity, pattern in severity_patterns:
+        for title in re.findall(pattern, text):
+            findings.append({
+                "severity": severity,
+                "category": "correctness",
+                "title": re.sub(r"\s+", " ", title).strip()[:240],
+                "evidence": evidence[:3] or ["l2-review.md:1"],
+                "impact": "see reviewer narrative",
+                "recommendation": "resolve or explicitly accept before delivery",
+                "confidence": 0.75,
+            })
+    if incomplete:
+        findings.append({
+            "severity": "high",
+            "category": "testing",
+            "title": "L2 review did not reach a terminal verdict",
+            "evidence": ["l2-review.md:1"],
+            "impact": "independent review evidence is incomplete",
+            "recommendation": "rerun L2 with all review inputs inside project_root or inline in context",
+            "confidence": 0.95,
+        })
+    elif not findings:
+        findings.append({
+            "severity": "info",
+            "category": "correctness",
+            "title": "No blocking finding extracted",
+            "evidence": evidence[:3] or ["l2-review.md:1"],
+            "impact": "none identified",
+            "recommendation": "retain raw reviewer narrative",
+            "confidence": 0.7,
+        })
+    if errors:
+        findings[0]["tool_errors"] = errors[:5]
+    return findings
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run-id", required=True)
+    ap.add_argument("--stdout", required=True)
+    ap.add_argument("--verdict", choices=VERDICTS, default=None)
+    ap.add_argument("--l1-commands", default="")
+    args = ap.parse_args()
+
+    run_dir = REVIEW_ROOT / args.run_id
+    stdout_path = Path(args.stdout)
+    if not run_dir.exists() or not stdout_path.exists():
+        print("missing review run dir or opencode stdout", file=sys.stderr)
+        return 2
+
+    text, terminal_stop, errors = parse_stream(stdout_path)
+    parsed = args.verdict or explicit_verdict(text)
+    incomplete = not terminal_stop or not parsed
+    verdict = parsed if not incomplete else "BLOCKED"
+    findings = findings_from_text(text, incomplete, errors)
+    l1_commands = [c for c in args.l1_commands.split("||") if c]
+    high = any(f["severity"] in {"critical", "high"} for f in findings)
+
+    report = {
+        "verdict": verdict,
+        "findings": findings,
+        "commands_reviewed": l1_commands,
+        "tests_missing": [],
+        "escalation_required": incomplete or high or verdict in {"CHANGES_REQUIRED", "BLOCKED"},
+        "escalation_reasons": (["incomplete L2 output"] if incomplete else []) + (["high finding or non-pass verdict"] if high or verdict in {"CHANGES_REQUIRED", "BLOCKED"} else []),
+        "raw_text_path": "l2-review.md",
+        "stream_complete": terminal_stop,
+        "tool_errors": errors,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (run_dir / "l2-review.md").write_text((text or "No final reviewer text emitted.") + "\n", encoding="utf-8")
+    (run_dir / "l2-review.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "decision.md").write_text(f"# decision\n\n{verdict}\n\nSee l2-review.md and l1.json.\n", encoding="utf-8")
+
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "completed" if terminal_stop else "review_incomplete"
+        manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
+        manifest["l2_verdict"] = verdict
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    validation = subprocess.run([sys.executable, str(RG), "validate", "--kind", "l2", "--file", str(run_dir / "l2-review.json")])
+    if validation.returncode != 0:
+        return validation.returncode
+    print(json.dumps({"run_id": args.run_id, "verdict": verdict, "complete": terminal_stop, "l2": str(run_dir / "l2-review.json")}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+=== FULL FILE: scripts/review-gate/l3_from_pi.py ===
+#!/usr/bin/env python3
+"""Normalize Pi JSONL output into a review-gate L3 report."""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+REVIEW_ROOT = Path.home() / ".hermes" / "artifacts" / "review"
+RG = Path.home() / ".hermes" / "skills" / "software-development" / "review-gate" / "scripts" / "review_gate.py"
+VERDICTS = ("PASS_WITH_NOTES", "CHANGES_REQUIRED", "BLOCKED", "PASS")
+
+
+def extract_strings(value) -> list[str]:
+    found: list[str] = []
+    if isinstance(value, str):
+        found.append(value)
+    elif isinstance(value, list):
+        for item in value:
+            found.extend(extract_strings(item))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"text", "content", "message", "output", "result", "response", "final"}:
+                found.extend(extract_strings(item))
+            elif isinstance(item, (dict, list)):
+                found.extend(extract_strings(item))
+    return found
+
+
+def parse_stream(path: Path) -> tuple[str, bool, list[str]]:
+    texts: list[str] = []
+    errors: list[str] = []
+    terminal_stop = False
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    for line in raw.splitlines():
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        typ = obj.get("type")
+        if typ == "message_update":
+            event = obj.get("assistantMessageEvent") or {}
+            if event.get("type") == "text_end" and event.get("content"):
+                texts.append(event["content"].strip())
+        if typ == "turn_end":
+            msg = obj.get("message") or {}
+            if msg.get("role") == "assistant":
+                for block in (msg.get("content") or []):
+                    if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                        texts.append(block["text"].strip())
+            terminal_stop = True
+        if typ == "agent_end":
+            terminal_stop = True
+        if typ == "tool_use":
+            state = obj.get("part", {}).get("state") or {}
+            if state.get("status") == "error":
+                errors.append(str(state.get("error") or "tool error"))
+    return "\n\n".join(t for t in texts if t).strip(), terminal_stop, errors
+
+
+def explicit_verdict(text: str) -> str | None:
+    patterns = [
+        r"(?im)^\s*\*{0,2}\s*(?:VERDICT|RECOMMENDATION|FINAL(?:_RECOMMENDATION)?)\s*\*{0,2}\s*[:=-]\s*\*{0,2}(PASS_WITH_NOTES|CHANGES_REQUIRED|BLOCKED|PASS)\*{0,2}\b",
+        r"(?im)^\s*\*{0,2}\s*(PASS_WITH_NOTES|CHANGES_REQUIRED|BLOCKED|PASS)\s*\*{0,2}\s*$",
+    ]
+    matches: list[str] = []
+    for pattern in patterns:
+        matches.extend(re.findall(pattern, text))
+    return matches[-1].upper() if matches else None
+
+
+def load_l2(run_dir: Path) -> dict:
+    p = run_dir / "l2-review.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def findings_from_text(text: str, l2: dict, incomplete: bool, errors: list[str]) -> tuple[list[dict], list[dict], list[dict]]:
+    evidence = list(dict.fromkeys(re.findall(r"[A-Za-z0-9_./~-]+\.[A-Za-z0-9]+:\d+(?:-\d+)?", text)))
+    l2_findings = l2.get("findings", [])
+    confirmed: list[dict] = []
+    rejected: list[dict] = []
+    new: list[dict] = []
+    for f in l2_findings:
+        if f.get("severity") in {"critical", "high"}:
+            confirmed.append(f)
+        else:
+            rejected.append(f)
+    if incomplete:
+        new.append({
+            "severity": "high",
+            "category": "tooling",
+            "title": "L3 review did not reach a terminal verdict",
+            "evidence": evidence[:3] or ["l3-review.md:1"],
+            "impact": "L3 evidence is incomplete",
+            "recommendation": "rerun L3 with all review inputs inside project_root or inline",
+            "confidence": 0.95,
+        })
+    if errors:
+        new.append({
+            "severity": "high",
+            "category": "tooling",
+            "title": f"L3 tool errors: {errors[0][:120]}",
+            "evidence": evidence[:3] or ["l3-review.md:1"],
+            "impact": "L3 could not read all review inputs",
+            "recommendation": "ensure review artifacts are inside project_root",
+            "confidence": 0.9,
+        })
+    return confirmed, rejected, new
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--run-id", required=True)
+    ap.add_argument("--stdout", required=True)
+    ap.add_argument("--verdict", choices=VERDICTS, default=None)
+    args = ap.parse_args()
+
+    run_dir = REVIEW_ROOT / args.run_id
+    stdout_path = Path(args.stdout)
+    if not run_dir.exists() or not stdout_path.exists():
+        print("missing run dir or pi stdout", file=sys.stderr)
+        return 2
+
+    text, terminal_stop, errors = parse_stream(stdout_path)
+    l2 = load_l2(run_dir)
+    parsed = args.verdict or explicit_verdict(text)
+    incomplete = not terminal_stop or not parsed
+    final = parsed if not incomplete else "BLOCKED"
+    confirmed, rejected, new = findings_from_text(text, l2, incomplete, errors)
+
+    report = {
+        "verdict": final,
+        "reviewed_l2_findings": l2.get("findings", []),
+        "confirmed_findings": confirmed,
+        "rejected_findings": rejected,
+        "new_findings": new,
+        "critical_invariants": [
+            "implementation matches acceptance criteria",
+            "L1 deterministic checks pass",
+            "read-only L3 does not modify project files",
+        ],
+        "final_recommendation": final,
+        "tests_missing": l2.get("tests_missing", []),
+        "escalation_required": incomplete or final in {"CHANGES_REQUIRED", "BLOCKED"},
+        "escalation_reasons": (["incomplete L3 output"] if incomplete else []) + (["non-pass verdict"] if final in {"CHANGES_REQUIRED", "BLOCKED"} else []),
+        "raw_text_path": "l3-review.md",
+        "stream_complete": terminal_stop,
+        "tool_errors": errors,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (run_dir / "l3-review.md").write_text((text or "No final reviewer text emitted.") + "\n", encoding="utf-8")
+    (run_dir / "l3-review.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "decision.md").write_text(f"# decision\n\n{final}\n\nL1 + L2 + Pi L3 completed.\n", encoding="utf-8")
+
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["status"] = "completed" if terminal_stop else "review_incomplete"
+        manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
+        manifest["l3_verdict"] = final
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    validation = subprocess.run([sys.executable, str(RG), "validate", "--kind", "l3", "--file", str(run_dir / "l3-review.json")])
+    if validation.returncode != 0:
+        return validation.returncode
+    print(json.dumps({"run_id": args.run_id, "verdict": final, "complete": terminal_stop, "l3": str(run_dir / "l3-review.json")}, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+=== FULL FILE: scripts/review-gate/test_review_gate.py ===
+#!/usr/bin/env python3
+"""Unit tests for review-gate risk routing and schema validation."""
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT = SCRIPT_DIR / "review_gate.py"
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from l2_from_opencode import explicit_verdict as l2_explicit_verdict
+from l3_from_pi import explicit_verdict as l3_explicit_verdict
+
+
+def run(*args):
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *args],
+        capture_output=True, text=True,
+    )
+
+
+class ReviewGateTests(unittest.TestCase):
+    def test_low_route(self):
+        with tempfile.TemporaryDirectory() as td:
+            m = Path(td) / "manifest.json"
+            m.write_text(json.dumps({
+                "run_id": "t-low",
+                "project_root": "/tmp",
+                "goal": "docs",
+                "acceptance_criteria": ["docs ok"],
+                "base_ref": "HEAD",
+                "head_ref": "WORKTREE",
+                "changed_files": ["README.md"],
+                "risk_level": "MEDIUM",
+                "risk_reasons": ["documentation only", "no behaviour change"],
+                "started_at": "x",
+                "completed_at": None,
+                "status": "in_progress",
+            }))
+            r = run("classify", "--manifest", str(m))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(m.read_text())["risk_level"], "LOW")
+            r = run("route", "--manifest", str(m))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            data = json.loads(r.stdout)
+            self.assertEqual(data["layers"], ["L1", "L2-light"])
+            self.assertFalse(data["l3_required"])
+
+    def test_high_route(self):
+        with tempfile.TemporaryDirectory() as td:
+            m = Path(td) / "manifest.json"
+            m.write_text(json.dumps({
+                "run_id": "t-high",
+                "project_root": "/tmp",
+                "goal": "auth",
+                "acceptance_criteria": ["secure"],
+                "base_ref": "HEAD",
+                "head_ref": "WORKTREE",
+                "changed_files": ["auth.py"],
+                "risk_level": "MEDIUM",
+                "risk_reasons": ["auth change", "public api"],
+                "started_at": "x",
+                "completed_at": None,
+                "status": "in_progress",
+            }))
+            r = run("classify", "--manifest", str(m))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(m.read_text())["risk_level"], "HIGH")
+            r = run("route", "--manifest", str(m))
+            data = json.loads(r.stdout)
+            self.assertEqual(data["layers"], ["L1", "L2", "L3"])
+            self.assertTrue(data["l3_required"])
+
+    def test_markdown_bold_verdicts(self):
+        samples = {
+            "**Verdict: PASS** (standalone)": "PASS",
+            "### Verdict\n**PASS**": "PASS",
+            "**PASS_WITH_NOTES**": "PASS_WITH_NOTES",
+            "**Recommendation: CHANGES_REQUIRED**": "CHANGES_REQUIRED",
+        }
+        for raw, expected in samples.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(l2_explicit_verdict(raw), expected)
+                self.assertEqual(l3_explicit_verdict(raw), expected)
+
+    def test_verdict_does_not_match_mid_sentence(self):
+        raw = "This is not a verdict PASS in prose."
+        self.assertIsNone(l2_explicit_verdict(raw))
+        self.assertIsNone(l3_explicit_verdict(raw))
+
+    def test_l2_schema_requires_evidence(self):
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "l2.json"
+            f.write_text(json.dumps({
+                "verdict": "CHANGES_REQUIRED",
+                "findings": [{
+                    "severity": "high",
+                    "category": "security",
+                    "title": "missing authz",
+                    "evidence": [],
+                    "impact": "privilege",
+                    "recommendation": "add check",
+                    "confidence": 0.9,
+                }],
+                "commands_reviewed": [],
+                "tests_missing": [],
+                "escalation_required": True,
+                "escalation_reasons": ["high finding"],
+            }))
+            r = run("validate", "--kind", "l2", "--file", str(f))
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("path:line", r.stdout + r.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+=== FULL FILE: scripts/review-gate/review_gate.py ===
+#!/usr/bin/env python3
+"""Create, classify, route, and validate layered review artifacts."""
+import argparse, json
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path.home()/'.hermes'/'artifacts'/'review'
+HIGH = ('auth','authorization','crypto','secret','payment','billing','migration','schema','data deletion','irreversible','concurrency','lock','transaction','cache consistency','remote command','file permission','network boundary','user input','public api','protocol','persistence format','backwards compatibility','production hotfix','release blocker','unverifiable production path')
+MEDIUM = ('business logic','multi-file feature','internal api change','new dependency','config change')
+LOW = ('documentation','comment','formatting','local test addition','no behaviour change','small refactor')
+SEVERITIES = {'blocker','high','medium','low','info'}
+CATEGORIES = {'spec','correctness','security','performance','concurrency','compatibility','testing','maintainability'}
+L3_FIELDS = {'reviewed_l2_findings','confirmed_findings','rejected_findings','new_findings','critical_invariants','final_recommendation'}
+
+
+def now(): return datetime.now(timezone.utc).isoformat()
+def load(path): return json.loads(Path(path).read_text())
+def save(path, data): Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def init(a):
+    rid = a.run_id or datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')
+    d = ROOT/rid; d.mkdir(parents=True, exist_ok=True)
+    m = {'run_id':rid,'project_root':a.project_root,'goal':a.goal,'acceptance_criteria':a.acceptance,'base_ref':a.base_ref,'head_ref':a.head_ref,'changed_files':a.changed_file or [],'risk_level':a.risk_level,'risk_reasons':a.risk_reason or [],'started_at':now(),'completed_at':None,'status':'in_progress'}
+    save(d/'manifest.json',m)
+    (d/'implementation-summary.md').write_text('# implementation summary\n')
+    print('[OK]',d)
+
+
+def classify(a):
+    m=load(a.manifest); rs=' '.join(map(str,m.get('risk_reasons',[]))).lower()
+    m['risk_level']='HIGH' if any(x in rs for x in HIGH) else 'MEDIUM' if any(x in rs for x in MEDIUM) else 'LOW' if any(x in rs for x in LOW) else a.default_level
+    m['classified_at']=now(); save(a.manifest,m); print('[OK]',m['risk_level'])
+
+
+def route(a):
+    level=load(a.manifest).get('risk_level','MEDIUM')
+    layers={'LOW':['L1','L2-light'],'MEDIUM':['L1','L2'],'HIGH':['L1','L2','L3']}[level]
+    print(json.dumps({'risk_level':level,'layers':layers,'l3_required':level=='HIGH'}))
+
+
+def validate_finding(f,i,errors):
+    for k in ('severity','category','title','evidence','impact','recommendation','confidence'):
+        if k not in f: errors.append(f'finding[{i}] missing {k}')
+    if f.get('severity') not in SEVERITIES: errors.append(f'finding[{i}] bad severity')
+    if f.get('category') not in CATEGORIES: errors.append(f'finding[{i}] bad category')
+    ev=f.get('evidence',[])
+    if f.get('severity')!='info' and (not ev or not all(':' in x for x in ev)): errors.append(f'finding[{i}] lacks path:line')
+    c=f.get('confidence');
+    if not isinstance(c,(int,float)) or not 0<=c<=1: errors.append(f'finding[{i}] bad confidence')
+
+
+def validate(a):
+    d=load(a.file); errors=[]
+    if a.kind=='manifest':
+        for k in ('run_id','project_root','goal','acceptance_criteria','base_ref','head_ref','changed_files','risk_level','risk_reasons','started_at','completed_at','status'):
+            if k not in d: errors.append('missing '+k)
+    elif a.kind=='l1':
+        for k in ('passed','commands','summary'): 
+            if k not in d: errors.append('missing '+k)
+    elif a.kind=='l2':
+        for k in ('verdict','findings','commands_reviewed','tests_missing','escalation_required','escalation_reasons'):
+            if k not in d: errors.append('missing '+k)
+        for i,f in enumerate(d.get('findings',[])): validate_finding(f,i,errors)
+    else:
+        for k in L3_FIELDS:
+            if k not in d: errors.append('missing '+k)
+    if errors:
+        print('[FAIL] '+'; '.join(errors)); raise SystemExit(1)
+    print('[OK]',a.kind,a.file)
+
+
+def parser():
+    p=argparse.ArgumentParser(); s=p.add_subparsers(required=True)
+    x=s.add_parser('init'); x.add_argument('--run-id'); x.add_argument('--project-root',required=True); x.add_argument('--goal',required=True); x.add_argument('--acceptance',action='append',default=[]); x.add_argument('--base-ref',default='HEAD'); x.add_argument('--head-ref',default='WORKTREE'); x.add_argument('--changed-file',action='append'); x.add_argument('--risk-level',default='MEDIUM'); x.add_argument('--risk-reason',action='append'); x.set_defaults(fn=init)
+    x=s.add_parser('classify'); x.add_argument('--manifest',required=True); x.add_argument('--default-level',choices=['LOW','MEDIUM','HIGH'],default='MEDIUM'); x.set_defaults(fn=classify)
+    x=s.add_parser('route'); x.add_argument('--manifest',required=True); x.set_defaults(fn=route)
+    x=s.add_parser('validate'); x.add_argument('--kind',choices=['manifest','l1','l2','l3'],required=True); x.add_argument('--file',required=True); x.set_defaults(fn=validate)
+    return p
+
+if __name__=='__main__':
+    a=parser().parse_args(); a.fn(a)
+
+
+=== FULL FILE: scripts/bin/hermes-python ===
+#!/usr/bin/env bash
+# Prefer Hermes runtime venv over system Homebrew Python.
+set -euo pipefail
+HERMES_PY="${HERMES_PYTHON:-$HOME/.hermes/hermes-agent/venv/bin/python}"
+if [ ! -x "$HERMES_PY" ]; then
+  echo "hermes-python: missing $HERMES_PY" >&2
+  exit 127
+fi
+exec "$HERMES_PY" "$@"
+
+
+=== FULL FILE: scripts/cron/cron_watchdog.sh ===
+#!/usr/bin/env bash
+# watchdog-heartbeat cron: run kanban dispatch + emit event-hub notify.
+# Stderr/stdout both go to the job's output file so the agent pass is skipped.
+set -u
+HUB=~/.hermes/skills/queen-dispatch/event-hub/scripts/hub.py
+LOG=~/.hermes/artifacts/queen/queen/_event-log.jsonl
+MARK=~/.hermes/cron/output/watchdog-last.txt
+date '+%Y-%m-%dT%H:%M:%S%z' > "$MARK"
+
+DISPATCH_OUT="$(hermes kanban dispatch --max 5 2>&1)" || true
+echo "## kanban dispatch" >> "$MARK"
+echo "$DISPATCH_OUT" | tail -20 >> "$MARK"
+echo >> "$MARK"
+
+# Always run notify; if event-log missing, create empty dir first
+mkdir -p "$(dirname "$LOG")"
+echo "## event-hub notify default" >> "$MARK"
+"$HOME/.hermes/bin/hermes-python" "$HUB" notify --policy default >> "$MARK" 2>&1 || echo "hub notify failed" >> "$MARK"
+echo "## event-hub notify quiet" >> "$MARK"
+"$HOME/.hermes/bin/hermes-python" "$HUB" notify --policy quiet >> "$MARK" 2>&1 || true
+echo "## events.jsonl count" >> "$MARK"
+find ~/.hermes/artifacts/queen -maxdepth 2 -name events.jsonl 2>/dev/null | wc -l >> "$MARK"
+cat "$MARK"
+
+
+=== FULL FILE: scripts/cron/cron_checkpoint.sh ===
+#!/usr/bin/env bash
+# checkpoint-hourly cron: write a wiki checkpoint file deterministically.
+set -u
+TS="$(date +%Y-%m-%d-%H)"
+WIKI_DIR=~/hermes-wiki/projects/hermes/checkpoints
+mkdir -p "$WIKI_DIR"
+OUT="$WIKI_DIR/${TS}.md"
+
+K="$(hermes kanban list 2>&1 || echo 'kanban list failed')"
+ARTIFACTS="$(find ~/.hermes/artifacts/queen -maxdepth 2 -name events.jsonl -mtime -1 2>/dev/null | head -20 || true)"
+HUB=~/.hermes/skills/queen-dispatch/event-hub/scripts/hub.py
+NOTIFY="$("$HOME/.hermes/bin/hermes-python" "$HUB" notify --policy default 2>&1 || echo 'hub failed')"
+
+cat > "$OUT" <<HEADER
+---
+title: Hermes Checkpoint ${TS}
+status: draft
+updated: $(date +%Y-%m-%d)
+type: project
+tags: [checkpoint, hermes, autogenerated]
+source: cron=c21c48eeeaf7
+generated_at: $(date -Iseconds)
+---
+
+# Hermes Checkpoint ${TS}
+
+## Cron
+- job: checkpoint-hourly (c21c48eeeaf7)
+- schedule: 0 * * * *
+
+## Kanban (live)
+\`\`\`
+$K
+\`\`\`
+
+## Recent dispatcher artifacts (last 24h)
+\`\`\`
+${ARTIFACTS:-none}
+\`\`\`
+
+## Event Hub notify (default)
+\`\`\`
+$NOTIFY
+\`\`\`
+HEADER
+
+echo "WROTE $OUT"
+ls -la "$OUT"
+
+
+=== FULL FILE: scripts/cron/cron_wiki_lint.sh ===
+#!/usr/bin/env bash
+# wiki-lint-daily cron: scan for stale pages + emit notify.
+set -u
+WIKI=~/hermes-wiki
+HUB=~/.hermes/skills/queen-dispatch/event-hub/scripts/hub.py
+STALE=0
+NEW=0
+for f in "$WIKI"/concepts/*.md "$WIKI"/projects/**/*.md; do
+  [ -f "$f" ] || continue
+  mtime=$(stat -f %m "$f" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  age_days=$(( (now - mtime) / 86400 ))
+  if [ "$age_days" -gt 90 ]; then
+    STALE=$((STALE+1))
+  else
+    NEW=$((NEW+1))
+  fi
+done
+
+echo "## wiki-lint-daily"
+echo "scanned: $((STALE+NEW))"
+echo "fresh: $NEW"
+echo "stale (>90d): $STALE"
+echo
+echo "## event-hub notify (default)"
+"$HOME/.hermes/bin/hermes-python" "$HUB" notify --policy default 2>&1 || echo "hub failed"
+
+
+=== FULL FILE: scripts/README-runtime.md ===
+# Hermes runtime Python
+
+Always use:
+
+```bash
+~/.hermes/bin/hermes-python
+# or
+~/.hermes/hermes-agent/venv/bin/python
+```
+
+Do **not** use Homebrew `/opt/homebrew/bin/python3` (currently 3.14, externally-managed).
+Hermes CLI itself already points at the venv via `~/.local/bin/hermes`.
+

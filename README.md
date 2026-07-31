@@ -20,3 +20,14 @@ Henry 的 hermes-agent 自定义补丁与扩展。只装 *新东西*，原生 he
 ## 自检结果
 
 详见 `selftest/*.notify.json`。所有 `notify.jsonl` 行数与原始期望匹配，无 `runtime exception` 误报。
+
+## 2026-07-31 48h tuning patch
+
+`tune-48h-preflight-parser-runtime_*`:
+- review-gate L2/L3 verdict parser accepts Markdown bold (`**Verdict: PASS**`, `### Verdict\n**PASS**`)
+- `scripts/bin/hermes-python` wrapper forces Hermes venv Python 3.11
+- cron scripts use hermes-python instead of system python3
+- config note: `voice.auto_tts=false` for silent 48h background
+- preflight baseline artifact lives under `~/.hermes/artifacts/verify-report-2026-07-31/`
+
+See `commits/tune-48h-preflight-parser-runtime_*.txt` and `scripts/review-gate/`, `scripts/cron/`, `scripts/bin/`.
