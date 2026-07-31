@@ -1,0 +1,19 @@
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Hermes scratch artifacts (巨大且不属于仓本身 — 归档用的摘要已在 selftest/)
+.lock
+*.tmp
+
+# 让旧版本的 commits/ 不会有一天把 .git 目录暴露
+.git/
+
+# 私人本地锁 / daemon 痕迹
+*.pid

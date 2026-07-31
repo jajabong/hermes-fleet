@@ -1,0 +1,36 @@
+{
+  "run": "resume-truly",
+  "notify_lines": 4,
+  "lines": [
+    {
+      "ts": "2026-07-31T05:24:05.271798+00:00",
+      "level": "info",
+      "task_id": "k1",
+      "detail": "exit=0 duration_ms=39"
+    },
+    {
+      "ts": "2026-07-31T05:24:26.426332+00:00",
+      "level": "info",
+      "task_id": "k2",
+      "detail": "exit=0 duration_ms=2073"
+    },
+    {
+      "ts": "2026-07-31T05:24:26.468368+00:00",
+      "level": "info",
+      "task_id": "k3",
+      "detail": "exit=0 duration_ms=40"
+    },
+    {
+      "ts": "2026-07-31T05:24:26.468993+00:00",
+      "level": "info",
+      "run_status": "success",
+      "task_ids": [
+        "k1",
+        "k2",
+        "k3"
+      ],
+      "summary_path": "/Users/henry/.hermes/artifacts/queen/dispatcher-selftest/resume-truly/summary.md",
+      "detail": "success"
+    }
+  ]
+}

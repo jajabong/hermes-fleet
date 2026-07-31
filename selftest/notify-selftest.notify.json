@@ -1,0 +1,43 @@
+{
+  "run": "notify-selftest",
+  "notify_lines": 5,
+  "lines": [
+    {
+      "ts": "2026-07-31T05:23:17.125565+00:00",
+      "level": "info",
+      "task_id": "a",
+      "detail": "exit=0 duration_ms=40"
+    },
+    {
+      "ts": "2026-07-31T05:23:17.168257+00:00",
+      "level": "warn",
+      "task_id": "b",
+      "detail": "exit=1 duration_ms=40"
+    },
+    {
+      "ts": "2026-07-31T05:23:17.168335+00:00",
+      "level": "info",
+      "task_id": "d",
+      "detail": "exit=0 duration_ms=41"
+    },
+    {
+      "ts": "2026-07-31T05:23:17.169051+00:00",
+      "level": "block",
+      "task_id": "c",
+      "detail": "blocked by failed dependency b"
+    },
+    {
+      "ts": "2026-07-31T05:23:17.169591+00:00",
+      "level": "warn",
+      "run_status": "partial_success",
+      "task_ids": [
+        "a",
+        "b",
+        "c",
+        "d"
+      ],
+      "summary_path": "/Users/henry/.hermes/artifacts/queen/dispatcher-selftest/notify-selftest/summary.md",
+      "detail": "partial_success"
+    }
+  ]
+}
