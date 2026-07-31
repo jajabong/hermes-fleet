@@ -1,0 +1,24 @@
+fix-id: fix-cli-upgrade-claude-220-20260731
+
+Upgrade claude-code across henry/macmini/aimax:
+
+| host     | before | after  |
+|----------|--------|--------|
+| henry    | 2.1.214 | 2.1.220 |
+| macmini  | 2.1.214 | 2.1.220 |
+| aimax    | 2.1.214 | 2.1.220 |
+
+Issues encountered:
+- npm postinstall (node install.cjs) requires --allow-scripts to copy native binary to bin/claude.exe. Without allow-scripts, package.json says 2.1.220 but bin/claude.exe remains old native binary returning version mismatch.
+- macmini: missing 'claude' symlink in /opt/homebrew/bin/ after npm install — created manually: ln -sf ../lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /opt/homebrew/bin/claude
+
+other CLIs already at latest in previous fix:
+- codex 0.146.0 (latest @openai/codex)
+- pi 0.83.0 (latest @earendil-works/pi-coding-agent)
+- opencode 1.18.10 (latest sst/opencode release)
+- claude 2.1.220 (latest @anthropic-ai/claude-code, after this commit)
+
+hermes-agent v0.19.0 is current release on all three hosts:
+- henry: v0.19.0 git (HEAD acfd376, local patch + AGENTS.md/CONTRIBUTING.md tweaks; origin/main 38 commits ahead but unrelated histories — not upgrading hermes-agent binary to avoid runtime breakage)
+- macmini: v0.19.0 brew pip
+- aimax: v0.19.0 git (HEAD 1ec59280, clean from upstream)
