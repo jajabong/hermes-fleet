@@ -1,0 +1,20 @@
+fix-id: fix-hermes-agent-align-20260731
+
+hermes-agent config alignment across henry/macmini/aimax, baseline = local (henry).
+
+Local changes:
+- agent.max_turns 500 -> 90 (debug leftover, aligned to remote defaults)
+
+Remote changes (applied):
+- macmini: model.provider anchor -> openai-api; remove model.api_mode (chat_completions)
+- macmini: delegation.provider anchor -> openai-api
+- macmini: providers.anchor.base_url -> 127.0.0.1:8088, api_mode -> openai-api, model -> anchor
+- aimax: model.provider ollama -> openai-api
+- aimax: model.base_url localhost:8088 -> 127.0.0.1:8088
+- aimax: model.default: anchor
+- aimax: providers.anchor.base_url localhost:8088 -> 127.0.0.1:8088, api_mode -> openai-api, model -> anchor
+- aimax: delegation.provider anchor -> openai-api, base_url -> 127.0.0.1:8088
+
+E2E verified:
+- macmini: codex exec "say pong" -> pong returned (2526 tokens)
+- aimax: aimax-queen-e2e-003 SUCCESS (opencode-write + pi-read + l1-check + l2-review all exit=0)
