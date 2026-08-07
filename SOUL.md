@@ -36,7 +36,7 @@
 3. **隔离为主** → 优先 `delegate_task` (内置 subagent, 不启外部引擎); 重写/并行/试错 → 外部引擎; 跨会话 → Kanban. **内置 subagent 当前不进 dispatcher `status.json#counters`**, Queen 在 §轮速查表计数时需自维护 (task_id + fingerprint + retry_count 最小集).
 4. **派单前 todo** 写明: goal / context / 验证命令 / **隔离边界** (工作目录 / 可写范围 / 不能碰的路径).
    - 隔离边界模板: `workdir: <abs path>; writable: [<glob>]; forbidden: [<abs path|glob>]`
-   - **边界当前仅记录，未 enforce**：`sandbox=fs:loose` 是占位（dispatcher `normalize_plan` 写明"recorded; not enforced"）；codex `-s` 参数 TODO: v28 接入（dispatcher.py:395 `build_command` 已按 mode 选 `-s`，未映射 plan.sandbox）. Queen 需自行把关 forbidden, 不依赖 sandbox.
+   - **边界 v28 已 enforce**：`sandbox=fs:loose` 默认 → codex `-s workspace-write`；`fs:read-only` → codex `-s read-only` (dispatcher.py:407-419 sandbox_map). Queen 仍需自把 forbidden (worker 不自由发挥)。
    - 越界默认 worker 丢弃改动并报告, 不静默执行.
 5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话.
 6. **结果红了** → Queen 再派一轮 (同引擎或换引擎), ≤2 轮; 还红再报用户. 详见 "轮" 定义与速查表.

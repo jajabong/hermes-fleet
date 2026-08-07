@@ -405,7 +405,16 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
     if engine == "shell":
         return list(task["argv"])
     if engine == "codex":
-        sandbox = "workspace-write" if mode == "write" else "read-only"
+        # v28: respect plan.sandbox override for codex -s flag.
+        # Default still derived from execution_mode (workspace-write/read-only).
+        sandbox_map = {
+            "fs:strict": "workspace-write",
+            "fs:loose": "workspace-write",
+            "fs:read-only": "read-only",
+        }
+        mode_sandbox = "workspace-write" if mode == "write" else "read-only"
+        plan_sandbox = task.get("_plan_sandbox")  # injected by execute_plan from normalized
+        sandbox = sandbox_map.get(plan_sandbox, mode_sandbox) if plan_sandbox else mode_sandbox
         last_message = project_root / output_file if output_file else task_dir / "agent-last-message.txt"
         return [
             "codex", "exec", "-C", str(project_root), "-s", sandbox,
@@ -688,6 +697,11 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
         by_id = {t["id"]: t for t in tasks}
         children = {t["id"]: [] for t in tasks}
         remaining_deps = {t["id"]: set(t["depends_on"]) for t in tasks}
+        # v28: inject plan-level sandbox so build_command can map to codex -s
+        plan_sandbox = normalized.get("sandbox")
+        if plan_sandbox:
+            for t in tasks:
+                t["_plan_sandbox"] = plan_sandbox
         for t in tasks:
             for dep in t["depends_on"]:
                 children[dep].append(t["id"])

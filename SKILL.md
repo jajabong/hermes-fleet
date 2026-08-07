@@ -241,7 +241,7 @@ Always dry-run first. Replace placeholders. Keep L1 summary inline for OpenCode 
 | `last_checkpoint_at` | `status.json` | 同上 | ISO8601 |
 | `last_checkpoint_mono` | `status.json` | 同上 | float (time.monotonic); 跨 --resume 持久化避免静默 |
 | `replan` | `events.jsonl` | run 结束 `run_status ∈ {partial_success, failed}` | reason = `run_status=<status>` |
-| `sandbox` | plan 顶层 → normalized | 默认 `fs:loose` | 当前仅记录，不强制；codex `-s` 参数将后续接入 (v24+) |
+| `sandbox` | plan 顶层 → normalized → `build_command` | 默认 `fs:loose` | **v28 已强制**：plan.sandbox 映射 codex `-s`（`fs:strict/fs:loose→workspace-write`, `fs:read-only→read-only`）|
 | `rollback_on_fail` | task 级 → normalized | 默认 `false`; 失败任务 summary.md 追加 `rollback: git checkout -- <project_root>` | **装饰字段**：仅文字提示，不真执行 git (v28 仍未硬化) |
 | `verification_command` | task 级（可选） | 通过 `build_prompt` 注入 worker prompt 的 "## Verification" 段 | SOUL v28: per-task verify 透传; worker 跑完报 exit code |
 
