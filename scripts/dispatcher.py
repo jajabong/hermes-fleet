@@ -382,7 +382,14 @@ def find_cycle(tasks: list[dict]) -> list[str]:
 def build_prompt(task: dict) -> str:
     goal = task["goal"].strip()
     context = task["context"].strip()
-    return goal + ("\n\n" + context if context else "")
+    parts = [goal]
+    if context:
+        parts.append(context)
+    # Optional verification_command (SOUL v28: per-task verify, opt-in via plan).
+    verify = (task.get("verification_command") or "").strip()
+    if verify:
+        parts.append(f"## Verification\nRun this after your work and report exit code:\n```\n{verify}\n```")
+    return "\n\n".join(parts)
 
 
 def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:

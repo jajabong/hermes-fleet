@@ -165,7 +165,7 @@ blocked / 不可逆 / 高风险 finding → 走 §汇报 唯一出口的紧急�
 
 L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两轮 (见 "轮" 速查表 L2 review 修复). Queen 只读结构化报告, 不逐行 review.
 
-**verify 责任分工**: worker 跑派单时 Queen 写的 verify 命令并回报 exit code + summary; Queen 复核 exit code (0=绿, 非0=红), 不重跑不逐行. dispatcher 当前 `build_prompt` (dispatcher.py:382-385) 仅拼接 goal+context, 未注入 verify 命令 (TODO: 加 `verification_command` 字段透传).
+**verify 责任分工**: worker 跑派单时 Queen 写的 verify 命令并回报 exit code + summary; Queen 复核 exit code (0=绿, 非0=红), 不重跑不逐行. dispatcher `build_prompt` (v28 起) 已注入 task 级 `verification_command` 字段 → worker prompt 的 "## Verification" 段.
 
 ## 任务编排（短 vs 长）
 
