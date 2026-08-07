@@ -15,6 +15,8 @@ TIMEOUT_S = 600
 
 
 def _build_cmd(engine: str, prompt: str, task: dict) -> list:
+    if engine == "shell":
+        return list(task.get("argv", []))
     if engine == "codex":
         return [
             "codex",
@@ -38,16 +40,19 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
             prompt,
         ]
     if engine == "claude":
-        # v2.3: parallel with codex read-only profile; Queen-direct shell equivalent.
-        return [
-            "claude",
-            "-p",
-            "--output-format",
-            "json",
-            "--allowedTools",
-            "Read,Grep,Glob,LS",
-            prompt,
-        ]
+            # v2.3: parallel with codex read-only profile; Queen-direct shell equivalent.
+            # Order matters: `claude -p "PROMPT" --flags` — prompt must come RIGHT AFTER -p,
+            # BEFORE --output-format / --allowedTools, otherwise claude CLI rejects with
+            # "Input must be provided either through stdin or as a prompt argument".
+            return [
+                "claude",
+                "-p",
+                prompt,
+                "--output-format",
+                "json",
+                "--allowedTools",
+                "Read,Grep,Glob,LS",
+            ]
     if engine == "opencode":
         # v28.9.2: 默认 model 与 SOUL §舰队表 L143 对齐; SOUL 列 3 选 1, 本文件取限流最强 (`kilocode/kilo-auto/free`) 为兜底.
         # 备选: `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free` (plan.task.model 显式传覆盖).
@@ -58,10 +63,11 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
 
 def _run(task: dict) -> dict:
     engine = task["engine"]
-    goal = task["goal"]
+    # shell task uses argv, not goal; default goal="" so _build_cmd gets empty prompt.
+    goal = task.get("goal", "")
     ctx = task.get("context", "")
     workdir = task.get("workdir", ".")
-    prompt = f"{goal}\n\n{ctx}" if ctx else goal
+    prompt = f"{goal}\n\n{ctx}" if ctx and goal else goal
     cmd = _build_cmd(engine, prompt, task)
     try:
         proc = subprocess.run(

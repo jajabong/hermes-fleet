@@ -1,0 +1,89 @@
+commit-msg: fix(v29.3-fleet-smoke): dispatch_batch shell 分支 + claude 提示词位置 + 6 worker smoke
+timestamp: 2026-08-07T21-13-21
+sha256: 6cbacc7f1588
+path: scripts/dispatch_batch.py
+smoke_test: 4/5 engines PASS (shell/pi/opencode/claude); codex blocked by upstream anchor gateway /v1/responses streaming 502 (not hermes-fleet)
+
+=== 修法 ===
+1. _build_cmd 加 `if engine == "shell": return list(task.get("argv", []))` — shell task 之前 raise 'unknown engine'
+2. claude 分支: prompt 位置从末尾移到 -p 后 (claude CLI 拒绝 'Input must be provided either through stdin or as a prompt argument' 当 prompt 不在 -p 紧后)
+3. _run shell task `goal = task.get("goal", "")` — shell task 没 goal 字段不再 KeyError
+
+=== 6 worker smoke 矩阵 ===
+| worker | engine | dispatch_batch.py | dispatcher.py | hermes-agent 内置 |
+|---|---|---|---|---|
+| shell | shell | ✅ PASS | ✅ PASS | N/A |
+| codex | codex | ❌ FAIL (anchor gateway /v1/responses stream 502) | ✅ PASS (smoke-shell v3-final 全绿) | N/A |
+| pi | pi | ✅ PASS | ✅ PASS | N/A |
+| opencode | opencode | ✅ PASS | ✅ PASS | N/A |
+| claude | claude | ✅ PASS (v29.3 fix) | ✅ PASS | N/A |
+| hermes-agent (内置 subagent) | N/A | N/A | N/A | ✅ PASS (deleg_d50ecf9f returned SMOKE_HERMES_AGENT_OK) |
+
+=== 关键发现 ===
+- dispatch_batch.py v28.9 + v28.9.1 修复后 (pi binary + claude branch), 跑通 4/5
+- codex /v1/responses streaming 502 是 anchor gateway 上游 bug, 不是 hermes-fleet 问题:
+  - 直接 curl /v1/responses non-stream: 200 OK
+  - 直接 curl /v1/responses stream: 200 OK (start)
+  - codex CLI stream: 502 Bad Gateway after turn.started
+  - 推测: codex 发的请求体 shape 与 anchor 的 /v1/responses handler 不完全匹配
+- dispatch_batch.py v28.9.1 漏了 shell 分支 (现在补上) + claude prompt 位置错 (现在修正)
+
+=== PATCH ===
+diff --git a/scripts/dispatch_batch.py b/scripts/dispatch_batch.py
+index 13a083c..9d00e99 100755
+--- a/scripts/dispatch_batch.py
++++ b/scripts/dispatch_batch.py
+@@ -15,6 +15,8 @@ TIMEOUT_S = 600
+ 
+ 
+ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
++    if engine == "shell":
++        return list(task.get("argv", []))
+     if engine == "codex":
+         return [
+             "codex",
+@@ -38,16 +40,19 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
+             prompt,
+         ]
+     if engine == "claude":
+-        # v2.3: parallel with codex read-only profile; Queen-direct shell equivalent.
+-        return [
+-            "claude",
+-            "-p",
+-            "--output-format",
+-            "json",
+-            "--allowedTools",
+-            "Read,Grep,Glob,LS",
+-            prompt,
+-        ]
++            # v2.3: parallel with codex read-only profile; Queen-direct shell equivalent.
++            # Order matters: `claude -p "PROMPT" --flags` — prompt must come RIGHT AFTER -p,
++            # BEFORE --output-format / --allowedTools, otherwise claude CLI rejects with
++            # "Input must be provided either through stdin or as a prompt argument".
++            return [
++                "claude",
++                "-p",
++                prompt,
++                "--output-format",
++                "json",
++                "--allowedTools",
++                "Read,Grep,Glob,LS",
++            ]
+     if engine == "opencode":
+         # v28.9.2: 默认 model 与 SOUL §舰队表 L143 对齐; SOUL 列 3 选 1, 本文件取限流最强 (`kilocode/kilo-auto/free`) 为兜底.
+         # 备选: `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free` (plan.task.model 显式传覆盖).
+@@ -58,10 +63,11 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
+ 
+ def _run(task: dict) -> dict:
+     engine = task["engine"]
+-    goal = task["goal"]
++    # shell task uses argv, not goal; default goal="" so _build_cmd gets empty prompt.
++    goal = task.get("goal", "")
+     ctx = task.get("context", "")
+     workdir = task.get("workdir", ".")
+-    prompt = f"{goal}\n\n{ctx}" if ctx else goal
++    prompt = f"{goal}\n\n{ctx}" if ctx and goal else goal
+     cmd = _build_cmd(engine, prompt, task)
+     try:
+         proc = subprocess.run(
+
