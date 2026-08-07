@@ -541,6 +541,41 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
         exit_code = 1
         error = f"{type(exc).__name__}: {exc}"
 
+    # Feature 6 (v29.2): verify-after-exit — exit 0 alone is not enough.
+    # Worker may complete with exit 0 but skip writing files (e.g. opencode
+    # auto-rejects external_directory writes; logs `permission requested`).
+    # If verification_command is provided, run it AFTER the worker subprocess
+    # and override exit_code to reflect verify result.
+    # See SOUL §Queen 架构观察 #1, #3.
+    verify_cmd = task.get("verification_command")
+    verify_status = "skipped"
+    if verify_cmd:
+        try:
+            verify_proc = subprocess.run(
+                verify_cmd,
+                cwd=str(project_root),
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if verify_proc.returncode == 0 and exit_code == 0:
+                verify_status = "passed"
+            elif exit_code == 0 and verify_proc.returncode != 0:
+                # Worker exit 0 but verify failed — override to red.
+                exit_code = verify_proc.returncode
+                error = f"verify failed: {verify_proc.stderr.strip()[:200] or verify_proc.stdout.strip()[:200]}"
+                verify_status = "failed"
+            else:
+                verify_status = f"worker_failed_first (verify rc={verify_proc.returncode})"
+        except subprocess.TimeoutExpired:
+            exit_code = 124
+            error = "verify command timed out after 30s"
+            verify_status = "timeout"
+        except Exception as exc:
+            error = f"verify exec failed: {type(exc).__name__}: {exc}"
+            verify_status = "exec_error"
+
     ended_at = now()
     duration_ms = int((time.monotonic() - start_mono) * 1000)
 
@@ -577,6 +612,8 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
     ]
     if fingerprint:
         summary_lines.append(f"finding_key: {finding_key}")
+    if verify_cmd:
+        summary_lines.append(f"verify_status: {verify_status}")
     # Feature 5: rollback hint — only on failure, only when the task opted in.
     # Hint is written to summary.md as a planning aid; we do NOT execute git.
     if exit_code != 0 and task.get("rollback_on_fail"):

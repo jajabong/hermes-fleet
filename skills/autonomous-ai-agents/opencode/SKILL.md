@@ -252,6 +252,14 @@ Success criteria:
 - 调研中途用户改问题 → 立即 kill 当前 session, 不保留中间结论 (调研没写文件, 安全)
 - 用户插话引用 task_id → abort
 
+### 限流报告规范 (v29.2)
+- 当 model 被 rate-limited (HTTP 429 / quota exceeded / "rate_limit" 错误), opencode **必须** stderr 输出 `rate_limited: <model_id>` 单行
+- 限流时尝试 fallback model (kilocode/... → opencodezen/... → anchor)，记录 fallback 链
+- 若所有 fallback 都限流, 输出 `rate_limited: all_models_failed` 到 stderr, exit 75 (rate_limit exit code)
+- dispatcher 检测到 `rate_limited:` stderr 行会标 finding_key 让 Queen 决定: 重派换 model / 重派同 model 等待 / 报用户
+- Queen 不需要 worker 默默重试到死 — 限流是 Queen 重派决策信号, 不是 worker 内部循环
+- 参考: SOUL §Queen 架构观察 #4, dispatcher.py v29.2 限流检测
+
 ### 与其他 worker 接力
 - **L2 review 接力**: codex 写完 → opencode review (per queen-dispatch/SKILL.md L200-209)
 - **并行 review**: 多 issue 并行派 opencode (per §Parallel Work Pattern)

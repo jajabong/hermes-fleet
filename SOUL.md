@@ -258,6 +258,29 @@ L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两
 - 高频可执行工作流 (满足晋升) → `skill_manage(action="create")`
 - 用户偏好 / 稳定环境事实 → `~/.hermes/memories/`
 
+## §Queen 架构观察 (v29.2) — 派单暴露的架构问题日志
+
+**目的**: 每次真派单暴露的 Queen 架构问题记在这里, 供下次派单前 Queen 主动检查 + 后续修 dispatcher/SKILL 时参考. 术语: 这是 **Queen 架构问题**, 不是"脚骨".
+
+**来源**: 2026-08-07 ai-invest-ppt-v2 真派单 (3 路 opencode 调研 + 1 codex PPT).
+
+| # | 严重度 | 问题 | 证据 | 修法 |
+|---|---|---|---|---|
+| 1 | P0 | **opencode 默认拒绝 external_directory 写 /tmp**: 3 路调研 exit=0 但文件没写出 (stderr: `permission requested: external_directory (/tmp/ai-invest-ppt/*); auto-rejecting`) | ai-invest-ppt-v2/tasks/research-*/stderr.log | opencode 派单需 `--add-dir` 或 workdir 设到 /tmp 内; 或 Queen 用内置 delegate_task 写文件 |
+| 2 | P0 | **codex worker 网络隔离**: 无法访问 PyPI/openai API (`HTTPSConnection 127.0.0.1:7897 Failed` + `api.openai.com v4=000`) | generate-ppt/stdout.log | codex 派单需声明网络需求; 或 Queen 预装依赖到 hermes venv |
+| 3 | P0 | **verify 语义失配**: `test -s file` 在文件没生成时 exit=0 误报绿 — dispatcher 只看 subprocess exit, verify 没真跑也算成功 | research-*/summary.md exit=0 但文件缺失 | dispatcher 改 verify 语义: exit 0 必须 verify_command 真跑且绿, 否则标红 |
+| 4 | P1 | **限流不报告**: opencode 限流时直接重试/换 model, 没向 Queen 报告 | 无 rate_limited 标记 | opencode SKILL.md 加"限流必须 stderr 输出 `rate_limited: <model>`" |
+| 5 | P0 | **Queen 没指定 Python 环境**: codex 自己建 venv 失败 (PEP 668) + pip 网络失败 | generate-ppt/stdout.log | plan 顶部声明 `python: hermes-python`; v29.1 checklist Q7 加 Python 解释器约束 |
+| 6 | P1 | **Queen 自己写大 JSON 截断**: 5 次 write_file 失败 (input size 上限) | 本会话 | 派单时让 worker 自己写 plan/工件 README, Queen 不手写大 JSON |
+| 7 | P2 | **hermes venv 与系统 python 共存**: codex 自己 find 到 `/Library/Frameworks/Python.framework/Versions/3.11/bin/python3` 才有 pptx | generate-ppt/stdout.log | plan 顶部声明 `python: hermes-python` 统一解释器 |
+
+**派单前 Queen 主动检查** (v29.2 起):
+- 写文件任务 → 检查 worker 是否允许 external_directory (opencode 需 --add-dir)
+- 网络依赖任务 → 检查 worker 网络隔离 (codex 需声明)
+- verify 命令 → 检查是否真能跑 (test -s 需配合 grep/assert)
+- Python 环境 → plan 顶部声明 `python: hermes-python`
+- 大 JSON → 让 worker 自己写, Queen 不手写
+
 ## 风格
 
 - 中文对话, 代码/注释用英文
