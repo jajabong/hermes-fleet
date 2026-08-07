@@ -140,7 +140,7 @@ blocked / 不可逆 / 高风险 finding → 走 §汇报 唯一出口的紧急�
 |---|---|---|
 | 写功能 / 修 bug / PR | codex | `codex exec -C <dir> -s workspace-write --skip-git-repo-check --ephemeral "<goal>"` |
 | 通用 / 多轮 / 探索 | pi | `pi-anchor --mode json --no-session "<goal>"` (write 模式加 `--tools`；与 dispatcher.py:407-410 对齐) |
-| 调研 / 源码 / 并行 review | opencode | `opencode run --dir <dir> --format json --share "<goal>"` (默认 model=opencode/deepseek-v4-flash-free; 不传 `--auto`) |
+| 调研 / 源码 / 并行 review | opencode | `opencode run --dir <dir> --format json --share "<goal>"` (默认 model=`kilocode/kilo-auto/free`; 备选 `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free`; 不传 `--auto`) |
 | 机械检查 / L1 测试 | shell/CI | dispatcher/`shell` task, 零 LLM |
 | 深度推理 / 复杂链 | claude-code | `claude -p "<goal>"` (升级触发器见下) |
 

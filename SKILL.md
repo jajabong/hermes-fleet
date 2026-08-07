@@ -33,7 +33,7 @@ results = dispatch_batch(tasks=[
 ## Engines (与 SOUL.md 舰队一致)
 - codex → `codex exec --skip-git-repo-check -C <workdir> "<goal>+context"`
 - pi → `pi -p --provider anchor --model anchor "<goal>+context"`
-- opencode → `opencode run --format json --dir <workdir> "<goal>+context"`（默认 model=opencode/deepseek-v4-flash-free；不传 --auto）
+- opencode → `opencode run --format json --dir <workdir> "<goal>+context"`（默认 model=`kilocode/kilo-auto/free`; 备选 `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free`; 不传 --auto）
 
 ## 不要
 - 不要 paste 完整文件到 context（用 path:line）
