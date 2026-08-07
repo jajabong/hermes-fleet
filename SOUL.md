@@ -176,7 +176,7 @@ Worker：短生命周期 task 默认 10min / 硬上限 60min / 3600s 留给人�
 
 | 命令 | 状态 | 用途 | 何时用 |
 |---|---|---|---|
-| `hermes kanban` | **read-only** (Queen-mode) | SQLite 持久任务, 33 子命令 (init/boards/create/swarm/assign/claim/complete/dispatch/daemon) | **⚠ Queen 是 delegate_task child, 写 Kanban 被 hermes 拒**: "delegate_task child contexts cannot mutate Kanban tasks". Queen 只能 READ via queen_state.py kanban --task-id. WRITE 必须 main hermes session (Henry 在主 chat 调 `hermes kanban create ...` 才能写) |
+| `hermes kanban` | **READ+WRITE (most actions)** (Queen-mode) | SQLite 持久任务, 33 子命令 (init/boards/create/swarm/assign/claim/complete/dispatch/daemon) | **v29.7 reality check**: SOUL v29.5 之前说 Queen 是 read-only 是**错的**。实测 `hermes kanban create/claim/complete` 都成功。Guard `_DELEGATED_CHILD_DENIED_BOARD_ACTIONS` (kanban.py L1147-1156) 仅拒绝 boards {create/new/rename/delete/archive/set-default-workdir}。`HERMES_DELEGATED_CHILD_CONTEXT` env 决定是否完全 block — Queen session 通常未设, 所以默认可写。**Queen 应主动用 kanban 写 task claim/complete 给跨 session 留痕** |
 | `hermes cron` | idle (目录已建 ~/.hermes/cron/) | 定时调度, 14 子命令 (list/create/edit/pause/resume/run/runs/history/tick) | 周期任务: e.g. nightly hermes insights 报告 |
 | `hermes insights` | `[USED 7d]` | session 历史 token 成本 + top tools + top skills | Queen 决策"哪个 worker 高 ROI" 时跑 |
 | `hermes monitoring` | enabled | OTLP service health metrics + redacted diagnostics | hermes-fleet 集成它替代自己写的 hermes-fleet/monitoring |
