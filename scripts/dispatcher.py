@@ -300,6 +300,10 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
             if extra_args and (not isinstance(extra_args, list) or not all(isinstance(x, str) for x in extra_args)):
                 errors.append(f"task {tid}: extra_args must be a string array")
                 extra_args = []
+            verify_cmd = raw.get("verification_command")
+            if verify_cmd is not None and not isinstance(verify_cmd, str):
+                errors.append(f"task {tid}: verification_command must be a string (or omitted)")
+                verify_cmd = None
             if engine == "codex" and any(x in FORBIDDEN_CODEX_FLAGS for x in extra_args):
                 errors.append(f"task {tid}: forbidden codex bypass flag")
             if engine == "codex" and any(x == "danger-full-access" for x in extra_args):
