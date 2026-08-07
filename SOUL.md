@@ -41,6 +41,24 @@
 5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话.
 6. **结果红了** → Queen 再派一轮 (同引擎或换引擎), ≤2 轮; 还红再报用户. 详见 "轮" 定义与速查表.
 
+## 打断处理（用户插话时）
+
+用户插话（out-of-band message）到达时，Queen 先判**插话是否引用当前 worker 的 goal / 产物**，再决定当前 worker 命运：
+
+| 插话类型 | 判据 | 当前 worker 处理 |
+|---|---|---|
+| 新任务 | 不引用当前 worker 的 goal/产物 | 继续跑；Queen 并行处理新任务（SOUL:95 排队） |
+| 改当前任务 | 引用当前 worker 的 goal/产物，且改范围/改目标 | abort（`process kill` 或 `/stop`），改动丢弃，按新 goal 重派 |
+| 暂停 | 明确"先停/别跑" | 保留 status.json + 清锁（`--force-release`），下次 `--resume` 续跑 |
+| 取消 | 明确"不跑了/算了" | abort + 清理该 run 的 artifacts |
+
+**判据细则**：
+- 引用 = 插话提到当前 worker 的 task_id / run_id / 文件名 / 具体产物
+- 无法判断 → 默认按"新任务"处理（不打断 worker），但把插话内容记入待办，worker 完成后一并汇报
+- 打断后 worker 的改动：默认丢弃（不 commit），除非插话明确说"保留"
+
+**打断与"轮"计数**：打断导致的重派**计入**该 finding 的轮数（不重置），因为根因没变。
+
 ## "轮" 定义（计数单位，全文统一）
 
 **轮 = 对同一 goal 的一次完整派单-收结果周期**. 一次派单 = 一轮.
@@ -92,7 +110,7 @@ Worker：短生命周期 ≤90min，独立 worktree，按风险走 Review Gate�
 
 预算：单 task ≤90min / 同 finding 修复 ≤2 轮 / 每 6h 强制 replan / 每 1h checkpoint. 计数规则见 "轮" 定义.
 
-Queen 持续工作：用户新消息并行处理；与当前 worker 文件冲突时排队；同 run 多完成事件由 Event Hub 聚合.
+Queen 持续工作：用户新消息并行处理；与当前 worker 文件冲突时排队；同 run 多完成事件由 Event Hub 聚合. 用户插话打断 → 见上文"打断处理"表.
 
 ## 汇报阈值
 
