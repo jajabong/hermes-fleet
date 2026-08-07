@@ -49,7 +49,9 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
             prompt,
         ]
     if engine == "opencode":
-        model = task.get("model", "opencode/deepseek-v4-flash-free")
+        # v28.9.2: 默认 model 与 SOUL §舰队表 L143 对齐; SOUL 列 3 选 1, 本文件取限流最强 (`kilocode/kilo-auto/free`) 为兜底.
+        # 备选: `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free` (plan.task.model 显式传覆盖).
+        model = task.get("model", "kilocode/kilo-auto/free")
         return ["opencode", "run", "--model", model, "--share", prompt]
     raise ValueError(f"unknown engine: {engine}")
 

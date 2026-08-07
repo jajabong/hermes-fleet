@@ -1,0 +1,28 @@
+commit-msg: tune(v28.9.2-model-align): opencode 默认 model 与 SOUL L143 对齐 + codex 注释补 --json -o
+timestamp: 2026-08-07T18-58-01
+sha256: 7f00b3e81d91
+path: scripts/dispatch_batch.py + SOUL.md
+py_compile: OK
+verify: 7/7 PASS (opencode default == kilocode/kilo-auto/free; plan.model override works; codex/pi/claude no regression)
+
+=== CHANGES ===
+1. dispatch_batch.py:38 'opencode/deepseek-v4-flash-free' -> 'kilocode/kilo-auto/free' (与 SOUL §舰队表 L143 对齐; 备选 opencode/laguna-s-2.1-free / opencode/nemotron-3-ultra-free 由 plan.task.model 显式传覆盖)
+2. SOUL.md L141 codex 命令模板注释补: "dispatcher 自动加 `--json -o <last-message>` 落 review artifact, 见 dispatcher.py:419-422" (修 P2: SOUL 与代码轻微漂移)
+
+=== PATCH ===
+diff --git a/scripts/dispatch_batch.py b/scripts/dispatch_batch.py
+index 8ff67f7..13a083c 100755
+--- a/scripts/dispatch_batch.py
++++ b/scripts/dispatch_batch.py
+@@ -49,7 +49,9 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
+             prompt,
+         ]
+     if engine == "opencode":
+-        model = task.get("model", "opencode/deepseek-v4-flash-free")
++        # v28.9.2: 默认 model 与 SOUL §舰队表 L143 对齐; SOUL 列 3 选 1, 本文件取限流最强 (`kilocode/kilo-auto/free`) 为兜底.
++        # 备选: `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free` (plan.task.model 显式传覆盖).
++        model = task.get("model", "kilocode/kilo-auto/free")
+         return ["opencode", "run", "--model", model, "--share", prompt]
+     raise ValueError(f"unknown engine: {engine}")
+ 
+
