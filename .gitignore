@@ -17,3 +17,7 @@ __pycache__/
 
 # 私人本地锁 / daemon 痕迹
 *.pid
+
+# 历史备份与运行时归档不入仓（本地落地用，仓只跟 fix-id 摘要）
+profiles-backup-*/
+soul-archive/

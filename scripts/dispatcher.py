@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures as cf
 import fcntl
+import hashlib
 import json
 import os
 import queue
@@ -23,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PLAN_VERSION = "1"
+FINDING_FINGERPRINT_VERSION = "1"
+CHECKPOINT_INTERVAL_SECONDS = 3600
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 RISK_LEVELS = {"LOW", "MEDIUM", "HIGH"}
 ENGINES = {"codex", "pi", "opencode", "shell"}
@@ -51,6 +54,58 @@ def fail(msg: str, code: int = 2) -> None:
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# Patterns stripped from each stderr line before fingerprinting so that the
+# same root-cause failure hashes the same across runs (timestamps, pids, and
+# incidental random tokens are noise; the underlying error text is the signal).
+_FP_LINE_PATTERNS = (
+    re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"),
+    re.compile(r"\bpid=\d+\b"),
+    re.compile(r"\btid=\d+\b"),
+    re.compile(r"\buid=\d+\b"),
+    re.compile(r"\bpid\s+\d+\b"),
+    re.compile(r"\b0x[0-9a-fA-F]{6,}\b"),         # memory addresses
+    re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"),  # uuids
+    re.compile(r"\b[a-f0-9]{16,}\b"),             # long hex blobs (sha, random ids)
+    re.compile(r"\b\d{10,}\b"),                   # epoch timestamps / long numerics
+)
+
+
+def finding_fingerprint(task_id: str, stderr_text: str) -> str:
+    """Return a short stable hash that groups identical root-cause failures.
+
+    Normalizes each stderr line by stripping leading noise (timestamps, pids,
+    uuids, random hex), then hashes the joined canonical text. Returns the
+    first 8 hex chars of sha256 — enough to distinguish distinct findings
+    while staying compact in status.json.
+    """
+    if not stderr_text:
+        canonical = ""
+    else:
+        cleaned_lines = []
+        for raw_line in stderr_text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            for pat in _FP_LINE_PATTERNS:
+                line = pat.sub("", line)
+            line = re.sub(r"\s+", " ", line).strip()
+            if line:
+                cleaned_lines.append(line)
+        canonical = "\n".join(cleaned_lines)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return digest[:8]
+
+
+def emit_replan_event(run_dir: Path, events_path: Path, reason: str) -> None:
+    """Append a replan event to events.jsonl.
+
+    Used at run-end when the run did not achieve full success, to signal
+    that the orchestrator should consider re-planning.
+    """
+    record = {"ts": now(), "event": "replan", "reason": reason}
+    append_jsonl(events_path, record)
 
 
 def write_json(path: Path, data) -> None:
@@ -156,6 +211,11 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
     if plan.get("version") != PLAN_VERSION:
         errors.append(f"plan.version must be {PLAN_VERSION!r}; got {plan.get('version')!r}")
 
+    # Feature 5: optional top-level sandbox. Default "fs:strict" for safety.
+    sandbox = plan.get("sandbox", "fs:strict")
+    if not isinstance(sandbox, str) or not sandbox:
+        errors.append(f"plan.sandbox must be a non-empty string; got {sandbox!r}")
+
     run_id = plan.get("run_id")
     if not isinstance(run_id, str) or not RUN_ID_RE.match(run_id):
         errors.append(f"plan.run_id must match {RUN_ID_RE.pattern}; got {run_id!r}")
@@ -243,6 +303,12 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
             if engine == "codex" and any(x == "danger-full-access" for x in extra_args):
                 errors.append(f"task {tid}: danger-full-access is forbidden")
 
+            # Feature 5: optional rollback_on_fail flag (default false).
+            rollback_on_fail = raw.get("rollback_on_fail", False)
+            if not isinstance(rollback_on_fail, bool):
+                errors.append(f"task {tid}: rollback_on_fail must be a boolean")
+                rollback_on_fail = False
+
             normalized_tasks.append({
                 "id": tid,
                 "engine": engine,
@@ -257,6 +323,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
                 "output_file": output_file,
                 "argv": shell_argv,
                 "extra_args": extra_args,
+                "rollback_on_fail": rollback_on_fail,
             })
 
     ids = {t["id"] for t in normalized_tasks}
@@ -280,6 +347,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
     normalized["project_root"] = str(project_root)
     normalized["artifact_root"] = str(artifact_root.resolve())
     normalized["risk_team"] = QUEEN_RISK_TEAM[risk_level]
+    normalized["sandbox"] = sandbox
     normalized["tasks"] = normalized_tasks
     return normalized, {t["id"]: t for t in normalized_tasks}
 
@@ -422,6 +490,18 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
 
     ended_at = now()
     duration_ms = int((time.monotonic() - start_mono) * 1000)
+
+    # Feature 2: derive a fingerprint from stderr on failure so identical
+    # root-cause errors are grouped under one finding key across retries.
+    # Read stderr.log back (it's already flushed+closed by Popen).
+    stderr_text = ""
+    try:
+        stderr_text = (task_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        stderr_text = ""
+    fingerprint = finding_fingerprint(task_id, stderr_text) if exit_code != 0 else ""
+    finding_key = f"{task_id}:{fingerprint}" if fingerprint else ""
+
     result = {
         "exit": exit_code,
         "duration_ms": duration_ms,
@@ -431,11 +511,25 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
     }
     if error:
         result["error"] = error
+    if fingerprint:
+        result["finding_key"] = finding_key
+        result["finding_fingerprint"] = fingerprint
     write_json(task_dir / "result.json", result)
     command_record.update({"ended_at": ended_at, "exit": exit_code})
     write_json(task_dir / "command.json", command_record)
+    summary_lines = [
+        f"task: {task_id}",
+        f"engine: {task['engine']}",
+        f"exit: {exit_code}",
+    ]
+    if fingerprint:
+        summary_lines.append(f"finding_key: {finding_key}")
+    # Feature 5: rollback hint — only on failure, only when the task opted in.
+    # Hint is written to summary.md as a planning aid; we do NOT execute git.
+    if exit_code != 0 and task.get("rollback_on_fail"):
+        summary_lines.append(f"rollback: git checkout -- {project_root}")
     (task_dir / "summary.md").write_text(
-        f"task: {task_id}\nengine: {task['engine']}\nexit: {exit_code}\n",
+        "\n".join(summary_lines) + "\n",
         encoding="utf-8",
     )
     event(events_path, "done" if exit_code == 0 else "fail", task_id,
@@ -454,6 +548,7 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
         "exit": exit_code,
         "duration_ms": duration_ms,
         "summary_path": str(task_dir / "summary.md"),
+        "finding_key": finding_key,
     }
 
 
@@ -493,23 +588,32 @@ def mark_blocked(task: dict, project_root: Path, run_dir: Path, events_path: Pat
 
 
 def _flush_status(run_dir: Path, normalized: dict, started_at: str,
-                   status_map: dict, run_status_hint: str = "partial") -> None:
-    """Write status.json incrementally so a mid-run kill leaves recoverable state."""
+                   status_map: dict, run_status_hint: str = "partial",
+                   counters: dict | None = None,
+                   last_checkpoint_at: str | None = None) -> None:
+    """Write status.json incrementally so a mid-run kill leaves recoverable state.
+
+    counters (Feature 1) and last_checkpoint_at (Feature 3) are optional so
+    older callers (and tests) can flush without them; they default to None
+    / empty and only appear in the JSON if explicitly provided.
+    """
     tasks = normalized["tasks"]
     summaries = [status_map[t["id"]] for t in tasks if t["id"] in status_map]
-    write_json(
-        run_dir / "status.json",
-        {
-            "run_id": normalized["run_id"],
-            "run_status": "running",
-            "started_at": started_at,
-            "completed_at": None,
-            "risk_level": normalized.get("risk_level"),
-            "risk_team": normalized.get("risk_team"),
-            "task_summaries": summaries,
-            "run_status_hint": run_status_hint,
-        },
-    )
+    payload = {
+        "run_id": normalized["run_id"],
+        "run_status": "running",
+        "started_at": started_at,
+        "completed_at": None,
+        "risk_level": normalized.get("risk_level"),
+        "risk_team": normalized.get("risk_team"),
+        "task_summaries": summaries,
+        "run_status_hint": run_status_hint,
+    }
+    if counters is not None:
+        payload["counters"] = counters
+    if last_checkpoint_at is not None:
+        payload["last_checkpoint_at"] = last_checkpoint_at
+    write_json(run_dir / "status.json", payload)
 
 
 def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
@@ -531,6 +635,16 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
         prior_status = load_previous_status(run_dir)
     prior_summaries = {s["id"]: s for s in prior_status.get("task_summaries", [])}
     started_at = prior_status.get("started_at") or now()
+
+    # Feature 1: counters — preserve across --resume by reloading from the prior
+    # status.json if present; otherwise start fresh.
+    prior_counters = prior_status.get("counters") or {}
+    counters = {
+        "total_retries": int(prior_counters.get("total_retries", 0)),
+        "findings": dict(prior_counters.get("findings", {})),
+    }
+    # Feature 3: last_checkpoint_at is carried across resumes too.
+    last_checkpoint_at = prior_status.get("last_checkpoint_at")
 
     lock = RunLock(run_dir, force_release=force_release)
     try:
@@ -680,7 +794,47 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
                             detail=f"crash: {summary['error']}",
                         )
                     status_map[tid] = summary
-                    _flush_status(run_dir, normalized, started_at, status_map, run_status_hint="partial")
+
+                    # Feature 1: count failures — every failed task is a retry
+                    # attempt; if a finding_key came back from run_task we also
+                    # bump that specific finding's count.
+                    if summary.get("status") == "failed":
+                        counters["total_retries"] += 1
+                        fkey = summary.get("finding_key") or ""
+                        if fkey:
+                            counters["findings"][fkey] = (
+                                int(counters["findings"].get(fkey, 0)) + 1
+                            )
+
+                    # Feature 3: emit a checkpoint.tick event when more than
+                    # CHECKPOINT_INTERVAL_SECONDS have elapsed since the last
+                    # checkpoint. On the very first task we have no prior
+                    # checkpoint yet, so we anchor the clock without emitting
+                    # (avoids spurious checkpoints on short runs).
+                    now_ts = now()
+                    now_mono = time.monotonic()
+                    last_mono = getattr(execute_plan, "_last_checkpoint_mono", None)
+                    if last_mono is None:
+                        execute_plan._last_checkpoint_mono = now_mono  # type: ignore[attr-defined]
+                    elif (now_mono - last_mono) >= CHECKPOINT_INTERVAL_SECONDS:
+                        completed_tasks = sum(
+                            1 for s in status_map.values() if s.get("status") == "done"
+                        )
+                        event(
+                            events_path,
+                            "checkpoint.tick",
+                            run_id=normalized["run_id"],
+                            completed_tasks=completed_tasks,
+                        )
+                        last_checkpoint_at = now_ts
+                        execute_plan._last_checkpoint_mono = now_mono  # type: ignore[attr-defined]
+
+                    _flush_status(
+                        run_dir, normalized, started_at, status_map,
+                        run_status_hint="partial",
+                        counters=counters,
+                        last_checkpoint_at=last_checkpoint_at,
+                    )
                     if summary["status"] == "done":
                         for child in children[tid]:
                             remaining_deps[child].discard(tid)
@@ -749,7 +903,10 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
             "risk_level": normalized.get("risk_level"),
             "risk_team": normalized.get("risk_team"),
             "task_summaries": summaries,
+            "counters": counters,
         }
+        if last_checkpoint_at is not None:
+            status["last_checkpoint_at"] = last_checkpoint_at
         write_json(run_dir / "status.json", status)
         (run_dir / "summary.md").write_text(
             "\n".join(
@@ -769,6 +926,11 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
             encoding="utf-8",
         )
         event(events_path, "run_end", run_status=run_status)
+        # Feature 4: if the run did not fully succeed, signal the orchestrator
+        # to consider re-planning. Emitted AFTER run_end so consumers see the
+        # final outcome first, then the follow-up suggestion.
+        if run_status in {"partial_success", "failed"}:
+            emit_replan_event(run_dir, events_path, reason=f"run_status={run_status}")
         level = "info" if run_status == "success" else "warn"
         append_notify(
             run_dir, level, run_status=run_status,
