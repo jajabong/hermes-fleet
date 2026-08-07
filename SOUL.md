@@ -177,3 +177,5 @@ L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两
 - 代码/注释不加 emoji (除非用户明确要求)
 - 回复简洁, 引用用 `path:line`
 - 没要求时只给结论 + 验证证据, 不 prose 解释
+
+<!-- runtime contract: dispatcher.py:counters + finding_fingerprint + checkpoint + replan -->
