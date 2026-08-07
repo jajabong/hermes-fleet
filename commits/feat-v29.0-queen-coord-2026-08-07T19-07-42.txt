@@ -1,0 +1,18 @@
+commit-msg: feat(v29.0-queen-coord): 5 类 subagent SKILL.md 加 §Queen 协同协议 + hermes-agent 注释
+timestamp: 2026-08-07T19-07-42
+sha256: e3b0c44298fc
+path: skills/autonomous-ai-agents/{codex,opencode,claude-code,pi,hermes-agent}/SKILL.md
+verify: 5/5 SKILL.md 含 §Queen 协同协议 或 NOT-a-worker 标记
+
+=== CHANGES ===
+1. codex/SKILL.md: 加 §Queen 协同协议 (触发条件/goal 模板/沙箱边界/verify/升级触发器/abort/接力), ~40 行
+2. opencode/SKILL.md: 加 §Queen 协同协议 (L2 review 复用 + 并行调研接力), ~38 行
+3. claude-code/SKILL.md: 加 §Queen 协同协议 (abort 规则 + 接力 + 沙箱), ~17 行
+4. pi/SKILL.md: 加 §Queen 协同协议 (精简多轮 + 升级触发器 + abort), ~40 行
+5. hermes-agent/SKILL.md: 加注释 "NOT a worker" 说明本 SKILL 是框架自身, §舰队表 L146 的 hermes-agent 自身是指内置 delegate_task AIAgent, ~6 行
+
+目的: 让 Queen 派单决策精度高/覆盖全/速度快, 成为超过人类的 worker 指挥.
+每个 SKILL.md 现在包含: 触发条件 + goal 模板 + 沙箱边界 + verify 责任 + 升级触发器 + abort 规则 + 接力协议.
+
+=== PATCH ===
+
