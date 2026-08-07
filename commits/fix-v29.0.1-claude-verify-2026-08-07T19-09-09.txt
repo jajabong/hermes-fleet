@@ -1,0 +1,47 @@
+commit-msg: fix(v29.0.1-claude-verify): claude-code SKILL.md 补 §Queen 协同协议完整段落
+timestamp: 2026-08-07T19-09-09
+sha256: e1bdfb9279a0
+path: skills/autonomous-ai-agents/claude-code/SKILL.md
+verify: 6 段全补齐 (触发条件/goal/产出/verify/abort/接力/沙箱)
+
+=== CONTEXT ===
+v29.0 commit (f897f3e) 给 claude-code SKILL.md 加 §Queen 协同协议 时漏了 4 段:
+  - 何时被 Queen 派
+  - Queen 派单时该传什么
+  - 该期待什么产出
+  - Verify 责任分工
+verify script 暴露这个 gap (3/7 checks 缺) 后本次补齐.
+
+=== PATCH ===
+diff --git a/skills/autonomous-ai-agents/claude-code/SKILL.md b/skills/autonomous-ai-agents/claude-code/SKILL.md
+index 14f0fea..b1ebfee 100644
+--- a/skills/autonomous-ai-agents/claude-code/SKILL.md
++++ b/skills/autonomous-ai-agents/claude-code/SKILL.md
+@@ -105,6 +105,26 @@ Success criteria: JSON output `{"result": "CLAUDE_SMOKE_OK"}` or text contains t
+ 
+ ## §Queen 协同协议 (v29.0)
+ 
++### 何时被 Queen 派
++- SOUL §舰队表 L145 + §claude-code 升级触发器 L147-157: **升级 engine**, 仅 pi 压不动时才派
++- 必升级触发: 上下文 >50k / 前一轮 pi verify 红 + timeout >3min
++- 建议升级: 链式判断 ≥3 层 / 架构权衡 / 失败调试 / 多步博弈
++
++### Queen 派单时该传什么
++- `goal`: 已升级的复杂任务 (pi 失败的延续)
++- `context`: pi 失败的 finding + verify 输出 + 调研结论
++- `execution_mode`: read_only 默认; write 需显式声明 (claude 写代码少见, 通常 pi 都压不动时 Queen 会换策略而不是派 claude 写)
++- 通过 dispatcher 派单时, 沙箱由 dispatcher.py:441-470 自动管; Queen 直接 shell 需手传 `--allowedTools`
++
++### 该期待什么产出
++- `summary.md`: 推理结论 + path:line 引用
++- `--output-format json` 让 stdout 可被 dispatcher 解析
++
++### Verify 责任分工
++- worker 跑 Queen 在 task 里给的 `verification_command`, 报 exit code
++- Queen 复核 exit code 不重跑 (派单 §硬规则 L2)
++- claude-code verify 通常涉及 LLM-judge, 不是简单的 exit 0 检查; Queen 应读 verdict 而非仅看 exit code
++
+ ### Abort / 打断规则 (SOUL §打断处理)
+ - 用户插话引用 task_id 或改了 goal → 立即 abort `claude -p` (subprocess kill, 安全)
+ - abort 半成品: claude-code 通常写 `--allowedTools` 受限目录, 即使半成品影响小; 但仍需 Queen 后续 git status 检查
+
