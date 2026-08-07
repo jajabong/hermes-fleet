@@ -33,10 +33,10 @@
    - **便宜 / 调研 / 并行 review** → `opencode` (默认 free 模型)
    - **精简多轮 / 通用探索** → `pi`
    - **深度推理 / 复杂链** → `claude-code` (升级触发器见舰队表)
-3. **隔离为主** → 优先 `delegate_task` (内置 subagent, 不启外部引擎); 重写/并行/试错 → 外部引擎; 跨会话 → Kanban.
+3. **隔离为主** → 优先 `delegate_task` (内置 subagent, 不启外部引擎); 重写/并行/试错 → 外部引擎; 跨会话 → Kanban. **内置 subagent 当前不进 dispatcher `status.json#counters`**, Queen 在 §轮速查表计数时需自维护 (task_id + fingerprint + retry_count 最小集).
 4. **派单前 todo** 写明: goal / context / 验证命令 / **隔离边界** (工作目录 / 可写范围 / 不能碰的路径).
    - 隔离边界模板: `workdir: <abs path>; writable: [<glob>]; forbidden: [<abs path|glob>]`
-   - **边界当前仅记录，未 enforce**：`sandbox=fs:loose` 是占位（dispatcher `normalize_plan` 写明"recorded; not enforced"）；codex `-s` 参数 TODO: v27 接入（dispatcher.py:391 `build_command` 已按 mode 选 `-s`，未映射 plan.sandbox）. Queen 需自行把关 forbidden, 不依赖 sandbox.
+   - **边界当前仅记录，未 enforce**：`sandbox=fs:loose` 是占位（dispatcher `normalize_plan` 写明"recorded; not enforced"）；codex `-s` 参数 TODO: v28 接入（dispatcher.py:391 `build_command` 已按 mode 选 `-s`，未映射 plan.sandbox）. Queen 需自行把关 forbidden, 不依赖 sandbox.
    - 越界默认 worker 丢弃改动并报告, 不静默执行.
 5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话.
 6. **结果红了** → Queen 再派一轮 (同引擎或换引擎), ≤2 轮; 还红再报用户. 详见 "轮" 定义与速查表.
@@ -83,7 +83,7 @@
 | 单 run 总重派 | ≤8 次 | 整 run (跨子任务求和) | 触顶 → 强制报用户, 不再自修 |
    (`retry_count` 字段在 dispatcher `status.json#counters` 中跟踪此口径)
 
-| 单 task 预算 | ≤60min | 单 task | 触顶 → kill + 报用户 (对齐 dispatcher `TIMEOUT_MIN=30, TIMEOUT_MAX=3600`) |
+| 单 task 预算 | task 默认 10min / 硬上限 60min / 3600s 留给人工长 task (与 dispatcher `TIMEOUT_MIN=30, TIMEOUT_MAX=3600` 一致; 默认 600s 见 dispatcher.py:278) | 触顶 → kill + 报用户 |
 
 **决策权（与 §决策树冲突时以下表为准）** — Queen 默认自决，下列情况请示：1) 不可逆/高代价 (删数据/生产发布/付费API/改密钥); 2) 目标冲突且无法推断优先级; 3) 缺凭据; 4) 用户明示"先问我". 禁止请示: 风格/命名/测试/Review/重复决策.
 
@@ -108,12 +108,12 @@
 
 复杂任务节奏：开场 0–1 次确认范围（目标已清则 0 次）→ 写计划并执行 → 汇总结果 + 证据。失败自修 ≤2 轮再报. 计数规则见 "轮" 定义.
 
-**Queen 跑 verify 的责任**: Queen 只复核 verify 的 exit code (worker 已跑 L19 模板), 不重跑不逐行. verify 失败 = 决策树第 6 步触发.
+**Queen 跑 verify 的责任**: Queen 只复核 verify 的 exit code (worker 跑派单时 Queen 写的 verify 命令), 不重跑不逐行. verify 失败 = 决策树第 6 步触发.
 
 ## 长程执行（>1h / 跨会话 / 多项目）
 
 状态源：Kanban（持久） + DAG Dispatcher（单次 DAG） + Event Hub（统一消费）。
-Worker：短生命周期 ≤60min（受 dispatcher `TIMEOUT_MIN=30, TIMEOUT_MAX=3600` 硬约束），独立 worktree，按风险走 Review Gate。
+Worker：短生命周期 task 默认 10min / 硬上限 60min / 3600s 留给人工长 task，独立 worktree，按风险走 Review Gate。
 
 边界：
 - 自动：worktree 创建、依赖安装、测试、lint、build、本地 checkpoint commit、回滚自己未验证改动。
@@ -121,14 +121,14 @@ Worker：短生命周期 ≤60min（受 dispatcher `TIMEOUT_MIN=30, TIMEOUT_MAX=
 
 完成（DoD）：全部必需任务 done AND 依赖闭合 AND L1 全绿 AND 无 blocker/high AND E2E 验收通过 AND 工作区无意外改动。
 
-预算：单 task ≤60min / 同 finding 修复 ≤2 轮 / run-end replan (run_status ∈ {partial_success,failed}) / 每 1h checkpoint. 计数规则见 "轮" 定义.
+预算：task 默认 10min / 硬上限 60min / 3600s 留给人工长 task / 同 finding 修复 ≤2 轮 / run-end replan (run_status ∈ {partial_success,failed}) / 每 1h checkpoint. 计数规则见 "轮" 定义.
 
 Queen 持续工作：用户新消息并行处理；与当前 worker 文件冲突时排队；同 run 多完成事件由 Event Hub 聚合. 用户插话打断 → 见上文"打断处理"表.
 
 ## 汇报阈值
 
 普通完成 → 批量汇总。
-blocked / 不可逆 / 高风险 finding → 立刻独立通知。
+blocked / 不可逆 / 高风险 finding → 走 §汇报 唯一出口的紧急分支（不走独立路径）.
 其余进度 → 默认静默，可通过状态命令查看。
 
 **汇报唯一出口**（§决策树 / §派单约束 的 finding 摘要也走这里）: Queen 只在本节写批量汇总，禁止在 §决策树 L42 / L109 / §决策权 等其他位置复述 finding 表. 派单 final-report 长度约束见 §决策树 6 之后.
@@ -165,7 +165,7 @@ blocked / 不可逆 / 高风险 finding → 立刻独立通知。
 
 L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两轮 (见 "轮" 速查表 L2 review 修复). Queen 只读结构化报告, 不逐行 review.
 
-**verify 责任分工**: worker 跑 L19 的 verify 命令并回报 exit code + summary; Queen 复核 exit code (0=绿, 非0=红), 不重跑不逐行. L19 模板是 Queen 派单时实例化给 worker, worker 不自由发挥.
+**verify 责任分工**: worker 跑派单时 Queen 写的 verify 命令并回报 exit code + summary; Queen 复核 exit code (0=绿, 非0=红), 不重跑不逐行. dispatcher 当前 `build_prompt` (dispatcher.py:382-385) 仅拼接 goal+context, 未注入 verify 命令 (TODO: 加 `verification_command` 字段透传).
 
 ## 任务编排（短 vs 长）
 
