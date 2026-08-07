@@ -1,0 +1,83 @@
+commit-msg: feat(v28.8-claude-fleet): §舰队表补 hermes-agent 行 + claude 接入 dispatcher + 6 行对齐
+timestamp: 2026-08-07T18-45-55
+sha256: 2b312185c9dc
+path: scripts/dispatcher.py + SOUL.md + skills/autonomous-ai-agents/{pi,claude-code}/SKILL.md
+wc -l: 1096 (dispatcher.py), 232 (SOUL.md)
+py_compile: OK
+smoke_test: 5/5 引擎 exit=0 (fleet-smoke-fresh-1786099344 + claude-sandbox-fresh + claude-write-test-v2)
+
+=== CHANGES ===
+1. SOUL.md §舰队表 L143-150: 新增 hermes-agent 自身行 (内置 delegate_task) + 3 注脚 (computer-use 不进表 / claude 已闭合 / 共 6 行)
+2. SOUL.md L150 注释明确: §舰队表 6 行 = 5 外部引擎 + 1 内置 subagent
+3. dispatcher.py:31 ENGINES 加 "claude"
+4. dispatcher.py:441-470 build_command 加 claude 分支, 沙箱镜像 codex (--allowedTools Read,Grep,Glob,LS for read-only / --add-dir project_root for write)
+5. queen-dispatch/SKILL.md L193: "外部引擎 (codex/pi/opencode)" -> "(codex/pi/opencode/shell/claude)", 加 5 类 vs 6 行说明
+6. 新建 autonomous-ai-agents/pi/SKILL.md (1.0.0)
+7. 新建 autonomous-ai-agents/claude-code/SKILL.md (1.0.0)
+8. autonomous-ai-agents/DESCRIPTION.md: 决策流表加 claude-code + pi 行, dispatcher 集成表更新
+
+=== PATCH ===
+diff --git a/SOUL.md b/SOUL.md
+index ff0b96f..511ba92 100644
+--- a/SOUL.md
++++ b/SOUL.md
+@@ -143,6 +143,11 @@ blocked / 不可逆 / 高风险 finding → 走 §汇报 唯一出口的紧急
+ | 调研 / 源码 / 并行 review | opencode | `opencode run --dir <dir> --format json --share "<goal>"` (默认 model=`kilocode/kilo-auto/free`; 备选 `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free`; 不传 `--auto`) |
+ | 机械检查 / L1 测试 | shell/CI | dispatcher/`shell` task, 零 LLM |
+ | 深度推理 / 复杂链 | claude-code | `claude -p "<goal>"` (升级触发器见下) |
++| 隔离 / 并行 / 多视角 (≥2 路独立) | hermes-agent 自身 (内置 `delegate_task`) | `delegate_task(tasks=[{goal,context,role:leaf\|orchestrator}, ...])` (不进 dispatcher `status.json#counters`; Queen 在 §轮速查表自维护最小集, 见 queen-dispatch/SKILL.md:190-195) |
++
++> 注 1: `computer-use` (GUI/桌面自动化) 是工具能力, 不进派单表; 需 GUI 任务时直接 `computer_use` 工具调用, 不走 §舰队表派单路径.
++> 注 2: `claude-code` 自 v2.3 起已接入 dispatcher (见 dispatcher.py ENGINES + build_command); Queen 也可直接 `claude -p` shell 调, 两种路径等价.
++> 注 3: §舰队表共 **6 行**: codex / pi / opencode / shell / claude-code / hermes-agent 自身 (即 §7 动机表里的全部派单路径).
+ 
+ **claude-code 升级触发器**（分层，不用主观判断）:
+ 
+diff --git a/scripts/dispatcher.py b/scripts/dispatcher.py
+index e975f80..765a03e 100755
+--- a/scripts/dispatcher.py
++++ b/scripts/dispatcher.py
+@@ -28,7 +28,7 @@ FINDING_FINGERPRINT_VERSION = "1"
+ CHECKPOINT_INTERVAL_SECONDS = 3600
+ RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+ RISK_LEVELS = {"LOW", "MEDIUM", "HIGH"}
+-ENGINES = {"codex", "pi", "opencode", "shell"}
++ENGINES = {"codex", "pi", "opencode", "shell", "claude"}
+ ROLES = {"implement", "research", "review", "general", "shell"}
+ MODES = {"read_only", "write"}
+ ON_FAILURE = {"block", "continue"}
+@@ -438,6 +438,33 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
+             "opencode", "run", "--format", "json", "--dir", str(project_root),
+             *task.get("extra_args", []), prompt,
+         ]
++    if engine == "claude":
++        # v2.3: route claude-code through dispatcher so QUEEN_RISK_TEAM HIGH layer
++        # and the upgrade trigger (§舰队表) can both dispatch it. Mirrors `claude -p`.
++        #
++        # Sandbox parity with codex:
++        #   fs:read-only -> --allowedTools Read,Grep,Glob,LS only (no Write/Edit/Bash)
++        #   fs:loose / fs:strict -> --add-dir project_root, no allowedTools restriction
++        #                         (claude-code has no native sandbox; --add-dir scopes FS)
++        sandbox_map = {
++            "fs:strict": "workspace-write",
++            "fs:loose": "workspace-write",
++            "fs:read-only": "read-only",
++        }
++        mode_sandbox = "workspace-write" if mode == "write" else "read-only"
++        plan_sandbox = task.get("_plan_sandbox")
++        sandbox = sandbox_map.get(plan_sandbox, mode_sandbox) if plan_sandbox else mode_sandbox
++        last_message = project_root / output_file if output_file else task_dir / "agent-last-message.txt"
++        cmd = [
++            "claude", "-p", prompt,
++            "--output-format", "json",
++        ]
++        if sandbox == "read-only":
++            cmd.extend(["--allowedTools", "Read,Grep,Glob,LS"])
++        else:
++            cmd.extend(["--add-dir", str(project_root)])
++        cmd.extend(task.get("extra_args", []))
++        return cmd
+     raise ValueError(f"unsupported engine: {engine}")
+ 
+ 
+

@@ -143,6 +143,11 @@ blocked / 不可逆 / 高风险 finding → 走 §汇报 唯一出口的紧急�
 | 调研 / 源码 / 并行 review | opencode | `opencode run --dir <dir> --format json --share "<goal>"` (默认 model=`kilocode/kilo-auto/free`; 备选 `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free`; 不传 `--auto`) |
 | 机械检查 / L1 测试 | shell/CI | dispatcher/`shell` task, 零 LLM |
 | 深度推理 / 复杂链 | claude-code | `claude -p "<goal>"` (升级触发器见下) |
+| 隔离 / 并行 / 多视角 (≥2 路独立) | hermes-agent 自身 (内置 `delegate_task`) | `delegate_task(tasks=[{goal,context,role:leaf\|orchestrator}, ...])` (不进 dispatcher `status.json#counters`; Queen 在 §轮速查表自维护最小集, 见 queen-dispatch/SKILL.md:190-195) |
+
+> 注 1: `computer-use` (GUI/桌面自动化) 是工具能力, 不进派单表; 需 GUI 任务时直接 `computer_use` 工具调用, 不走 §舰队表派单路径.
+> 注 2: `claude-code` 自 v2.3 起已接入 dispatcher (见 dispatcher.py ENGINES + build_command); Queen 也可直接 `claude -p` shell 调, 两种路径等价.
+> 注 3: §舰队表共 **6 行**: codex / pi / opencode / shell / claude-code / hermes-agent 自身 (即 §7 动机表里的全部派单路径).
 
 **claude-code 升级触发器**（分层，不用主观判断）:
 

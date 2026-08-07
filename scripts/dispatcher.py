@@ -28,7 +28,7 @@ FINDING_FINGERPRINT_VERSION = "1"
 CHECKPOINT_INTERVAL_SECONDS = 3600
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 RISK_LEVELS = {"LOW", "MEDIUM", "HIGH"}
-ENGINES = {"codex", "pi", "opencode", "shell"}
+ENGINES = {"codex", "pi", "opencode", "shell", "claude"}
 ROLES = {"implement", "research", "review", "general", "shell"}
 MODES = {"read_only", "write"}
 ON_FAILURE = {"block", "continue"}
@@ -438,6 +438,33 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
             "opencode", "run", "--format", "json", "--dir", str(project_root),
             *task.get("extra_args", []), prompt,
         ]
+    if engine == "claude":
+        # v2.3: route claude-code through dispatcher so QUEEN_RISK_TEAM HIGH layer
+        # and the upgrade trigger (§舰队表) can both dispatch it. Mirrors `claude -p`.
+        #
+        # Sandbox parity with codex:
+        #   fs:read-only -> --allowedTools Read,Grep,Glob,LS only (no Write/Edit/Bash)
+        #   fs:loose / fs:strict -> --add-dir project_root, no allowedTools restriction
+        #                         (claude-code has no native sandbox; --add-dir scopes FS)
+        sandbox_map = {
+            "fs:strict": "workspace-write",
+            "fs:loose": "workspace-write",
+            "fs:read-only": "read-only",
+        }
+        mode_sandbox = "workspace-write" if mode == "write" else "read-only"
+        plan_sandbox = task.get("_plan_sandbox")
+        sandbox = sandbox_map.get(plan_sandbox, mode_sandbox) if plan_sandbox else mode_sandbox
+        last_message = project_root / output_file if output_file else task_dir / "agent-last-message.txt"
+        cmd = [
+            "claude", "-p", prompt,
+            "--output-format", "json",
+        ]
+        if sandbox == "read-only":
+            cmd.extend(["--allowedTools", "Read,Grep,Glob,LS"])
+        else:
+            cmd.extend(["--add-dir", str(project_root)])
+        cmd.extend(task.get("extra_args", []))
+        return cmd
     raise ValueError(f"unsupported engine: {engine}")
 
 
