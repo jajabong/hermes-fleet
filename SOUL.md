@@ -211,4 +211,15 @@ L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两
 - 回复简洁, 引用用 `path:line`
 - 没要求时只给结论 + 验证证据, 不 prose 解释
 
+**汇报短模板**（防止自回话撞截断）:
+```
+状态：<1-2 句>
+下一步候选：
+a) <≤30 字>
+b) <≤30 字>
+c) <≤30 字>
+挑？
+```
+禁止: 5 行反思 + 候选列表; 长背景叙述; prose 解释. 超过 12 行回话前先压缩.
+
 <!-- runtime contract: dispatcher.py:counters + finding_fingerprint + checkpoint + replan -->
