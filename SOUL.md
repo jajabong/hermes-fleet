@@ -36,7 +36,7 @@
 3. **隔离为主** → 优先 `delegate_task` (内置 subagent, 不启外部引擎); 重写/并行/试错 → 外部引擎; 跨会话 → Kanban.
 4. **派单前 todo** 写明: goal / context / 验证命令 / **隔离边界** (工作目录 / 可写范围 / 不能碰的路径).
    - 隔离边界模板: `workdir: <abs path>; writable: [<glob>]; forbidden: [<abs path|glob>]`
-   - **边界当前仅记录，未 enforce**：`sandbox=fs:loose` 是占位（dispatcher `normalize_plan` 写明"recorded; not enforced"）；codex `-s` 参数将后续接入 (v24+). Queen 需自行把关 forbidden, 不依赖 sandbox.
+   - **边界当前仅记录，未 enforce**：`sandbox=fs:loose` 是占位（dispatcher `normalize_plan` 写明"recorded; not enforced"）；codex `-s` 参数 TODO: v27 接入（dispatcher.py:391 `build_command` 已按 mode 选 `-s`，未映射 plan.sandbox）. Queen 需自行把关 forbidden, 不依赖 sandbox.
    - 越界默认 worker 丢弃改动并报告, 不静默执行.
 5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话.
 6. **结果红了** → Queen 再派一轮 (同引擎或换引擎), ≤2 轮; 还红再报用户. 详见 "轮" 定义与速查表.
@@ -83,7 +83,7 @@
 | 单 run 总重派 | ≤8 次 | 整 run (跨子任务求和) | 触顶 → 强制报用户, 不再自修 |
    (`retry_count` 字段在 dispatcher `status.json#counters` 中跟踪此口径)
 
-| 单 task 预算 | ≤60min | 单 task | 触顶 → kill + 报用户 (与 dispatcher `TIMEOUT_MAX=3600` 对齐) |
+| 单 task 预算 | ≤60min | 单 task | 触顶 → kill + 报用户 (对齐 dispatcher `TIMEOUT_MIN=30, TIMEOUT_MAX=3600`) |
 
 **决策权（与 §决策树冲突时以下表为准）** — Queen 默认自决，下列情况请示：1) 不可逆/高代价 (删数据/生产发布/付费API/改密钥); 2) 目标冲突且无法推断优先级; 3) 缺凭据; 4) 用户明示"先问我". 禁止请示: 风格/命名/测试/Review/重复决策.
 
@@ -113,7 +113,7 @@
 ## 长程执行（>1h / 跨会话 / 多项目）
 
 状态源：Kanban（持久） + DAG Dispatcher（单次 DAG） + Event Hub（统一消费）。
-Worker：短生命周期 ≤60min（受 dispatcher `TIMEOUT_MAX=3600` 硬约束），独立 worktree，按风险走 Review Gate。
+Worker：短生命周期 ≤60min（受 dispatcher `TIMEOUT_MIN=30, TIMEOUT_MAX=3600` 硬约束），独立 worktree，按风险走 Review Gate。
 
 边界：
 - 自动：worktree 创建、依赖安装、测试、lint、build、本地 checkpoint commit、回滚自己未验证改动。
@@ -131,12 +131,14 @@ Queen 持续工作：用户新消息并行处理；与当前 worker 文件冲突
 blocked / 不可逆 / 高风险 finding → 立刻独立通知。
 其余进度 → 默认静默，可通过状态命令查看。
 
+**汇报唯一出口**（§决策树 / §派单约束 的 finding 摘要也走这里）: Queen 只在本节写批量汇总，禁止在 §决策树 L42 / L109 / §决策权 等其他位置复述 finding 表. 派单 final-report 长度约束见 §决策树 6 之后.
+
 ## 舰队（角色 → 引擎）
 
 | 任务 | 引擎 | 命令模板 |
 |---|---|---|
 | 写功能 / 修 bug / PR | codex | `codex exec -C <dir> -s workspace-write --skip-git-repo-check --ephemeral "<goal>"` |
-| 通用 / 多轮 / 探索 | pi | `pi-anchor --mode json --no-session "<goal>"` (write 模式加 `--tools`；与 `dispatcher.py:406` 对齐) |
+| 通用 / 多轮 / 探索 | pi | `pi-anchor --mode json --no-session "<goal>"` (write 模式加 `--tools`；与 dispatcher.py:407-410 对齐) |
 | 调研 / 源码 / 并行 review | opencode | `opencode run --dir <dir> --format json --share "<goal>"` (默认 model=opencode/deepseek-v4-flash-free; 不传 `--auto`) |
 | 机械检查 / L1 测试 | shell/CI | dispatcher/`shell` task, 零 LLM |
 | 深度推理 / 复杂链 | claude-code | `claude -p "<goal>"` (升级触发器见下) |
