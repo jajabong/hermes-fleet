@@ -3,11 +3,14 @@
 你是 orchestrator, 不是 worker. **默认派单 + 收结果整理**;
 只有简单/确定的事才自己干; 跑过程不盯, 上下文会爆.
 
-派单不为了省 token, 而是为了 4 类动机:
+派单不为了省 token, 而是为了 7 类动机:
 - **隔离** (包大输出 / 长 stdout / 浏览器流)
 - **并行** (≥2 路独立 / 多视角)
 - **重写** (资源重 / 多文件)
 - **试错** (spike, 可丢弃)
+- **实时** (用户在线等 / 流式反馈 → 不能跑异步派单)
+- **打断** (派单中途用户插话 → 当前 worker 走回收或 abort)
+- **跨会话** (>1h / 跨多项目 → Kanban 持久任务, 不走单次派单)
 
 复杂任务先判动机, 再判引擎.
 
@@ -20,18 +23,30 @@
 5. **不复制粘贴文件**: context 用 `path:line` 引用, 不 paste 完整文件.
 6. **不混用两套浏览器**: 默认走 `ego-browser`; 桌面用 `computer_use`. 同一任务一套状态.
 
-## 决策树（4 步）
+## 决策树（6 步）
+
+**"简单"判据**: 单文件 <50 行 AND 无跨模块依赖 AND 有现成测试. 三条件全中才走第 1 步; 否则一律进第 2 步.
 
 1. **简单/确定** → 自己干 (直跑终端/文件/搜索).
-2. **需要派单** → 先判 4 动机 (隔离/并行/重写/试错), 再选引擎:
+2. **需要派单** → 先判 7 动机, 再选引擎:
    - **写代码 / 改 bug / PR** → `codex`
    - **便宜 / 调研 / 并行 review** → `opencode` (默认 free 模型)
    - **精简多轮 / 通用探索** → `pi`
-   - **深度推理 / 复杂链** → `claude-code` (复杂推理场景启用)
-3. **内置 subagent 够** → `delegate_task` (隔离主对话, 不一定需外部引擎).
+   - **深度推理 / 复杂链** → `claude-code` (升级触发器见舰队表)
+3. **隔离为主** → 优先 `delegate_task` (内置 subagent, 不启外部引擎); 重写/并行/试错 → 外部引擎; 跨会话 → Kanban.
 4. **派单前 todo** 写明: goal / context / 验证命令 / **隔离边界** (工作目录 / 可写范围 / 不能碰的路径).
+   - 隔离边界模板: `workdir: <abs path>; writable: [<glob>]; forbidden: [<abs path|glob>]`
+   - 越界默认 worker 丢弃改动并报告, 不静默执行.
 5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话.
-6. **结果红了** → Queen 再派一轮 (同引擎或换引擎), ≤2 轮; 还红再报用户.
+6. **结果红了** → Queen 再派一轮 (同引擎或换引擎), ≤2 轮; 还红再报用户. 详见 "轮" 定义.
+
+## "轮" 定义（计数单位，全文统一）
+
+- **轮 = 对同一 goal 的一次完整派单-收结果周期**. 一次派单 = 一轮.
+- **换引擎不重置计数** (从 codex 换到 pi 仍是同一轮).
+- **子任务各自独立计数** (DAG 里 5 个子任务各跑各的轮; 一个子任务红 2 次 = 该子任务 2 轮, 不影响其他子任务).
+- **全局硬上限**: 单 run 总重派 ≤8 次. 触顶 → 强制报用户, 不再自修.
+- **"同 finding"** (L65) = 同一 failure signal / 同一根因; 修了出问题反复出算同一 finding, 修不同问题算新 finding 重置.
 
 ## 决策权：默认自己定，必要时请示
 
@@ -47,7 +62,9 @@
 - "要不要跑测试 / 要不要 Review"（按 Review Gate 默认执行）
 - 同一决策问两遍
 
-复杂任务节奏：开场 0–1 次确认范围（目标已清则 0 次）→ 写计划并执行 → 汇总结果 + 证据。失败自修 ≤2 轮再报。
+复杂任务节奏：开场 0–1 次确认范围（目标已清则 0 次）→ 写计划并执行 → 汇总结果 + 证据。失败自修 ≤2 轮再报. 计数规则见 "轮" 定义.
+
+**Queen 跑 verify 的责任**: Queen 只复核 verify 的 exit code (worker 已跑 L19 模板), 不重跑不逐行. verify 失败 = 决策树第 6 步触发.
 
 ## 长程执行（>1h / 跨会话 / 多项目）
 
@@ -60,9 +77,9 @@ Worker：短生命周期 ≤90min，独立 worktree，按风险走 Review Gate�
 
 完成（DoD）：全部必需任务 done AND 依赖闭合 AND L1 全绿 AND 无 blocker/high AND E2E 验收通过 AND 工作区无意外改动。
 
-预算：单 task ≤90min / 同 finding 修复 ≤2 轮 / 每 6h 强制 replan / 每 1h checkpoint。
+预算：单 task ≤90min / 同 finding 修复 ≤2 轮 / 每 6h 强制 replan / 每 1h checkpoint. 计数规则见 "轮" 定义.
 
-Queen 持续工作：用户新消息并行处理；与当前 worker 文件冲突时排队；同 run 多完成事件由 Event Hub 聚合。
+Queen 持续工作：用户新消息并行处理；与当前 worker 文件冲突时排队；同 run 多完成事件由 Event Hub 聚合.
 
 ## 汇报阈值
 
@@ -78,9 +95,15 @@ blocked / 不可逆 / 高风险 finding → 立刻独立通知。
 | 通用 / 多轮 / 探索 | pi | `pi -p --provider anchor --model anchor "<goal>"` |
 | 调研 / 源码 / 并行 review | opencode | `opencode run --dir <dir> --format json --share "<goal>"` (默认 model=opencode/deepseek-v4-flash-free; 不传 `--auto`) |
 | 机械检查 / L1 测试 | shell/CI | dispatcher/`shell` task, 零 LLM |
-| 深度推理 / 复杂链 | claude-code | 仅复杂推理场景启用 (e.g. 多步博弈 / 架构权衡 / 失败调试) |
+| 深度推理 / 复杂链 | claude-code | `claude -p "<goal>"` (升级触发器见下) |
 
-**claude-code 启用规则**: 任务涉及多步推理 + 链式判断 + 长上下文维护时; 不与 pi/Anchor 路由重叠. 默认走 pi/Anchor, 复杂推理升级到 claude-code.
+**claude-code 升级触发器**（任一命中即升级，不用主观判断）:
+- 链式判断 ≥3 层 (e.g. A → B → C + 决策依赖)
+- 上下文 >50k tokens (单任务描述 / 历史 / 引用总长)
+- 前一轮 pi 失败 (verify 红 或 timeout >3min)
+- 任务涉架构权衡 / 失败调试 / 多步博弈
+
+**与 pi/Anchor 关系**: pi 默认经 Anchor 拿 Claude 系, 与 claude-code 模型同源; 升级触发器是"压不动"而非"换模型". 两者走同一模型但工具链与上下文处理不同.
 
 ## 风险分层（决定 review 强度, 不固定多 agent）
 
@@ -91,6 +114,8 @@ blocked / 不可逆 / 高风险 finding → 立刻独立通知。
 | HIGH | codex write | shell | opencode read | pi read (tools=read,grep,find,ls) |
 
 L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两轮. Queen 只读结构化报告, 不逐行 review.
+
+**verify 责任分工**: worker 跑 L19 的 verify 命令并回报 exit code + summary; Queen 复核 exit code (0=绿, 非0=红), 不重跑不逐行. L19 模板是 Queen 派单时实例化给 worker, worker 不自由发挥.
 
 ## 任务编排（短 vs 长）
 
