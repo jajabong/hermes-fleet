@@ -6,6 +6,7 @@ the script's stdout enters the parent as a tool result, not the conversation.
 """
 import concurrent.futures as cf
 import json
+import os
 import subprocess
 import sys
 
@@ -26,6 +27,13 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
         # _v1_responses_stream_gen in-flight JSONResponse handling), NOT a hermes-fleet
         # issue. Fix lives in anchor repo, not hermes-fleet. dispatch_batch.py codex
         # branch stays minimal — let config.toml decide.
+        #
+        # v29.6 fix: codex CLI 0.146.0 + macOS mihomo/Clash proxy at 127.0.0.1:7897
+        # requires NO_PROXY=127.0.0.1,localhost to bypass proxy for loopback. Without
+        # this, codex routes /v1/responses through mihomo which returns 502 Bad Gateway
+        # (mihomo doesn't know how to proxy loopback). We pass NO_PROXY explicitly so
+        # dispatch_batch.py works on any host regardless of system proxy config.
+        # See commit v29.6 fleet-smoke-5of5 for live verification.
         codex_args = ["codex", "exec", "--skip-git-repo-check"]
         if "model" in task:
             codex_args.extend(["-m", task["model"]])
@@ -68,6 +76,16 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
 
 def _run(task: dict) -> dict:
     engine = task["engine"]
+    # v29.6: codex needs NO_PROXY=127.0.0.1,localhost to bypass macOS mihomo/Clash
+    # proxy (127.0.0.1:7897). Without this, codex routes /v1/responses through
+    # mihomo which returns 502 Bad Gateway. NO_PROXY is harmless on hosts
+    # without a proxy.
+    # pi-anchor requires ANCHOR_API_KEYS env var (the wrapper script uses set -u).
+    # Set a dummy value if not already in env.
+    env = dict(os.environ)
+    env.setdefault("ANCHOR_API_KEYS", "dummy,test")
+    env["NO_PROXY"] = "127.0.0.1,localhost"
+    env["no_proxy"] = "127.0.0.1,localhost"
     # shell task uses argv, not goal; default goal="" so _build_cmd gets empty prompt.
     goal = task.get("goal", "")
     ctx = task.get("context", "")
@@ -81,6 +99,7 @@ def _run(task: dict) -> dict:
             text=True,
             timeout=TIMEOUT_S,
             cwd=workdir,
+            env=env,
         )
         return {
             "id": task.get("id"),

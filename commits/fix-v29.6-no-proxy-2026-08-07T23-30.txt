@@ -1,0 +1,48 @@
+commit-msg: fix(v29.6-no-proxy): dispatch_batch codex NO_PROXY=127.0.0.1 bypass mihomo proxy
+timestamp: 2026-08-07T23-30
+path: scripts/dispatch_batch.py
+
+=== ROOT CAUSE ===
+codex CLI 0.146.0 uses Rust reqwest HTTP client. On startup reqwest detects system HTTPS
+proxy (HTTPS_PROXY env or system proxy). Henry's macOS runs mihomo/Clash at 127.0.0.1:7897.
+reqwest routes /v1/responses loopback requests to mihomo; mihomo does not know how to proxy
+loopback, returns 502 Bad Gateway.
+
+=== DEBUG PATH ===
+1. anchor v0.9.69 (ada1f12) fixed /v1/responses cascade-exhausted path - necessary but not
+   sufficient (codex still got 502 even with cascade healthy).
+2. Built /tmp/codex_proxy.py TCP proxy (port 8089 forward to 8088 + full request/response
+   body log). codex routed through proxy shows 200 OK + complete 5974-byte SSE body with
+   response.completed event. Yet codex still reports 502.
+3. RUST_LOG=debug env var reveals: 'reqwest::connect: proxy(http://127.0.0.1:7897/) intercepts
+   https://chatgpt.com/'. The reqwest HTTP client is bypassing our base_url override and
+   routing through system proxy.
+4. Set NO_PROXY=127.0.0.1,localhost -> codex exit=0 + complete response (15,845 tokens).
+5. Verified by curl /v1/responses (no proxy, returns 200 OK SSE).
+
+=== FIX ===
+dispatch_batch.py:
+1. import os (L9)
+2. codex branch comment (L29-37): explains NO_PROXY rationale + commit reference
+3. _run() universal env injection (L78-86):
+     env.setdefault('ANCHOR_API_KEYS', 'dummy,test')
+     env['NO_PROXY'] = '127.0.0.1,localhost'
+     env['no_proxy'] = '127.0.0.1,localhost'
+4. subprocess.run(..., env=env) at L98 - passes injected env to worker subprocess
+
+=== 5/5 FLEET SMOKE VERIFY ===
+  smoke-shell        engine=shell      exit=  0  PASS  (V296_EVID_SHELL_OK)
+  smoke-codex        engine=codex      exit=  0  PASS  (V296_EVID_CODEX_OK)
+  smoke-pi           engine=pi         exit=  0  PASS  (V296_EVID_PI_OK)
+  smoke-opencode     engine=opencode   exit=  0  PASS  (V296_EVID_OPENCODE_OK)
+  smoke-claude       engine=claude     exit=  0  PASS  (V296_EVID_CLAUDE_OK)
+
+=== IMPACT ===
+v29.2 fleet-smoke 4/5 (codex 502 cascade exhausted) -> v29.6 5/5 (codex recovered).
+hermes-fleet 5-engine dispatch_batch.py works regardless of system proxy config.
+
+=== RELATED ===
+- anchor v0.9.69 commit ada1f12 (force-pushed ce660f1): /v1/responses streaming 502 fix
+- hermes-fleet v28.9 (f668440): initial codex 502 repro (reverted in v29.4.1)
+- hermes-fleet v29.4.1 (f668440): revert v29.4 'anchor high' model override (not valid)
+- This v29.6: NO_PROXY bypass of system HTTPS proxy (THE actual root cause for codex)
