@@ -52,6 +52,8 @@
 | 同 finding 自修 | ≤2 轮 | 单子任务 | 触顶 → 换引擎或报用户 |
 | L2 review 修复 | ≤2 轮 | 单 finding | 触顶 → 报用户 |
 | 单 run 总重派 | ≤8 次 | 整 run (跨子任务求和) | 触顶 → 强制报用户, 不再自修 |
+   (`retry_count` 字段在 dispatcher `status.json#counters` 中跟踪此口径)
+
 | 单 task 预算 | ≤90min | 单 task | 触顶 → kill + 报用户 |
 
 **计数细则**:

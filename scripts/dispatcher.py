@@ -211,8 +211,10 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
     if plan.get("version") != PLAN_VERSION:
         errors.append(f"plan.version must be {PLAN_VERSION!r}; got {plan.get('version')!r}")
 
-    # Feature 5: optional top-level sandbox. Default "fs:strict" for safety.
-    sandbox = plan.get("sandbox", "fs:strict")
+    # Feature 5: optional top-level sandbox. Default "fs:loose" because we do NOT
+    # yet enforce it (codex build_command maps mode→-s, not plan.sandbox). The
+    # field is recorded for future enforcement via codex `-s` wiring.
+    sandbox = plan.get("sandbox", "fs:loose")
     if not isinstance(sandbox, str) or not sandbox:
         errors.append(f"plan.sandbox must be a non-empty string; got {sandbox!r}")
 
@@ -348,6 +350,10 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
     normalized["artifact_root"] = str(artifact_root.resolve())
     normalized["risk_team"] = QUEEN_RISK_TEAM[risk_level]
     normalized["sandbox"] = sandbox
+    # Print a one-liner so operators see sandbox is recorded but not enforced.
+    # codex build_command uses execution_mode→-s; plan.sandbox will be wired in
+    # a future v24+. Queen should NOT trust plan.sandbox as an isolation gate.
+    print(f"[dispatcher] sandbox={sandbox} (recorded; not enforced — see runtime contract)")
     normalized["tasks"] = normalized_tasks
     return normalized, {t["id"]: t for t in normalized_tasks}
 
@@ -590,12 +596,14 @@ def mark_blocked(task: dict, project_root: Path, run_dir: Path, events_path: Pat
 def _flush_status(run_dir: Path, normalized: dict, started_at: str,
                    status_map: dict, run_status_hint: str = "partial",
                    counters: dict | None = None,
-                   last_checkpoint_at: str | None = None) -> None:
+                   last_checkpoint_at: str | None = None,
+                   last_checkpoint_mono: float | None = None) -> None:
     """Write status.json incrementally so a mid-run kill leaves recoverable state.
 
-    counters (Feature 1) and last_checkpoint_at (Feature 3) are optional so
-    older callers (and tests) can flush without them; they default to None
-    / empty and only appear in the JSON if explicitly provided.
+    counters (Feature 1), last_checkpoint_at (Feature 3), and
+    last_checkpoint_mono (Feature 3 anchor) are optional so older callers
+    (and tests) can flush without them; they default to None and only
+    appear in the JSON if explicitly provided.
     """
     tasks = normalized["tasks"]
     summaries = [status_map[t["id"]] for t in tasks if t["id"] in status_map]
@@ -613,6 +621,8 @@ def _flush_status(run_dir: Path, normalized: dict, started_at: str,
         payload["counters"] = counters
     if last_checkpoint_at is not None:
         payload["last_checkpoint_at"] = last_checkpoint_at
+    if last_checkpoint_mono is not None:
+        payload["last_checkpoint_mono"] = last_checkpoint_mono
     write_json(run_dir / "status.json", payload)
 
 
@@ -638,13 +648,18 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
 
     # Feature 1: counters — preserve across --resume by reloading from the prior
     # status.json if present; otherwise start fresh.
+    # total_retries counts failed task occurrences (incl. first failure);
+    # retry_count counts tasks that previously failed and are being re-executed —
+    # this is what SOUL's "≤8 轮 per run" maps to.
     prior_counters = prior_status.get("counters") or {}
     counters = {
         "total_retries": int(prior_counters.get("total_retries", 0)),
+        "retry_count": int(prior_counters.get("retry_count", 0)),
         "findings": dict(prior_counters.get("findings", {})),
     }
-    # Feature 3: last_checkpoint_at is carried across resumes too.
+    # Feature 3: last_checkpoint_at + monotonic anchor carried across resumes.
     last_checkpoint_at = prior_status.get("last_checkpoint_at")
+    _last_checkpoint_mono = prior_status.get("last_checkpoint_mono")  # may be None on first run
 
     lock = RunLock(run_dir, force_release=force_release)
     try:
@@ -795,11 +810,15 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
                         )
                     status_map[tid] = summary
 
-                    # Feature 1: count failures — every failed task is a retry
-                    # attempt; if a finding_key came back from run_task we also
-                    # bump that specific finding's count.
+                    # Feature 1: count failures. total_retries = failed-task
+                    # occurrences (incl. first failure). retry_count = tasks
+                    # that previously failed and are now being re-executed —
+                    # this is what SOUL "≤8 轮 per run" maps to. We detect
+                    # retry via prior_status (carried across --resume).
                     if summary.get("status") == "failed":
                         counters["total_retries"] += 1
+                        if tid in prior_summaries and prior_summaries[tid].get("status") == "failed":
+                            counters["retry_count"] += 1
                         fkey = summary.get("finding_key") or ""
                         if fkey:
                             counters["findings"][fkey] = (
@@ -808,14 +827,20 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
 
                     # Feature 3: emit a checkpoint.tick event when more than
                     # CHECKPOINT_INTERVAL_SECONDS have elapsed since the last
-                    # checkpoint. On the very first task we have no prior
-                    # checkpoint yet, so we anchor the clock without emitting
+                    # checkpoint. _last_checkpoint_mono is carried across
+                    # --resume via status.json#last_checkpoint_mono; on the
+                    # very first task we anchor the clock without emitting
                     # (avoids spurious checkpoints on short runs).
                     now_ts = now()
                     now_mono = time.monotonic()
-                    last_mono = getattr(execute_plan, "_last_checkpoint_mono", None)
+                    last_mono = (
+                        execute_plan._last_checkpoint_mono  # type: ignore[attr-defined]
+                        if hasattr(execute_plan, "_last_checkpoint_mono")
+                        else _last_checkpoint_mono
+                    )
                     if last_mono is None:
                         execute_plan._last_checkpoint_mono = now_mono  # type: ignore[attr-defined]
+                        _last_checkpoint_mono = now_mono
                     elif (now_mono - last_mono) >= CHECKPOINT_INTERVAL_SECONDS:
                         completed_tasks = sum(
                             1 for s in status_map.values() if s.get("status") == "done"
@@ -828,12 +853,14 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
                         )
                         last_checkpoint_at = now_ts
                         execute_plan._last_checkpoint_mono = now_mono  # type: ignore[attr-defined]
+                        _last_checkpoint_mono = now_mono
 
                     _flush_status(
                         run_dir, normalized, started_at, status_map,
                         run_status_hint="partial",
                         counters=counters,
                         last_checkpoint_at=last_checkpoint_at,
+                        last_checkpoint_mono=_last_checkpoint_mono,
                     )
                     if summary["status"] == "done":
                         for child in children[tid]:
@@ -907,6 +934,8 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
         }
         if last_checkpoint_at is not None:
             status["last_checkpoint_at"] = last_checkpoint_at
+        if _last_checkpoint_mono is not None:
+            status["last_checkpoint_mono"] = _last_checkpoint_mono
         write_json(run_dir / "status.json", status)
         (run_dir / "summary.md").write_text(
             "\n".join(
@@ -962,11 +991,11 @@ def parse_args(argv=None):
     p.add_argument("--artifact-root", default=str(DEFAULT_ARTIFACT_ROOT),
                    help="Artifact root under ~/.hermes/artifacts/")
     p.add_argument("--resume", dest="resume", action="store_true", default=None,
-                   help="Resume from existing status.json: skip done, reset running, retry failed (continue)")
+                   help="Resume from existing status.json: skip done, reset stale running to pending, keep blocked, keep failed (no auto-retry; use new --plan or clear status to force a retry)")
     p.add_argument("--no-resume", dest="resume", action="store_false",
                    help="Fail if run directory already has status.json (default)")
     p.add_argument("--force-release", dest="force_release", action="store_true",
-                   help="Remove stale .lock before starting (post-kill recovery)")
+                   help="Remove stale .lock before starting (post-kill recovery); does NOT touch status.json")
     return p.parse_args(argv)
 
 
