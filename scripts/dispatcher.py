@@ -330,6 +330,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
                 "argv": shell_argv,
                 "extra_args": extra_args,
                 "rollback_on_fail": rollback_on_fail,
+                "verification_command": (raw.get("verification_command") or "").strip() or None,
             })
 
     ids = {t["id"] for t in normalized_tasks}
@@ -602,6 +603,8 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
     if fingerprint:
         result["finding_key"] = finding_key
         result["finding_fingerprint"] = fingerprint
+    if verify_cmd:
+        result["verify_status"] = verify_status
     write_json(task_dir / "result.json", result)
     command_record.update({"ended_at": ended_at, "exit": exit_code})
     write_json(task_dir / "command.json", command_record)

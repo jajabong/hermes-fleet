@@ -1,0 +1,39 @@
+commit-msg: fix(v29.2.1-verify-normalize): v29.2 verify-after-exit 撒谎修复 - normalize_plan 漏传 verification_command
+timestamp: 2026-08-07T20-21-19
+sha256: 74e2dec8b4c1
+path: scripts/dispatcher.py
+verify_repro: verify-repro-test2 (shell task, exit 0 but verify fail -> exit 1, finding_key:shell-no-write:e3b0c442, verify_status:failed) — 正确标红 ✓
+
+=== 根因 (诚实记录) ===
+v29.2 (0a73cae) commit message 写加了 'verify-after-exit' 逻辑, 但 normalize_plan (dispatcher.py:300-333) 把 raw task dict 拷到 normalized_tasks 时**漏了 verification_command 字段**. run_task 的 task.get('verification_command') 永远拿到 None, verify-after-exit 逻辑从未触发.
+
+verify-repro-test (修复前): shell 跑 echo hello exit 0 + verify 'test -s /tmp/verify-repro/should-exist.txt' 应该红 → 实际 exit 0 标绿 (verify 没跑).
+verify-repro-test2 (修复后): exit 1, verify_status:failed, finding_key 标红 ✓
+
+=== 修法 ===
+dispatcher.py:333 后加一行:
+  'verification_command': (raw.get('verification_command') or '').strip() or None
+
+=== PATCH ===
+diff --git a/scripts/dispatcher.py b/scripts/dispatcher.py
+index fa69d76..be441e3 100755
+--- a/scripts/dispatcher.py
++++ b/scripts/dispatcher.py
+@@ -330,6 +330,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
+                 "argv": shell_argv,
+                 "extra_args": extra_args,
+                 "rollback_on_fail": rollback_on_fail,
++                "verification_command": (raw.get("verification_command") or "").strip() or None,
+             })
+ 
+     ids = {t["id"] for t in normalized_tasks}
+@@ -602,6 +603,8 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
+     if fingerprint:
+         result["finding_key"] = finding_key
+         result["finding_fingerprint"] = fingerprint
++    if verify_cmd:
++        result["verify_status"] = verify_status
+     write_json(task_dir / "result.json", result)
+     command_record.update({"ended_at": ended_at, "exit": exit_code})
+     write_json(task_dir / "command.json", command_record)
+
