@@ -1,0 +1,61 @@
+commit-msg: fix(v29.4.1-codex-revert): revert v29.4 -m 'anchor high' (gateway 400 'Unknown model')
+timestamp: 2026-08-07T21-42-40
+sha256: e6594f13c1e3
+path: scripts/dispatch_batch.py
+
+=== 诚实记录 ===
+v29.4 (ca431bf era) 给 dispatch_batch.py codex 分支加了 `-m 'anchor high'` 想绕过 anchor-auto
+router /v1/responses streaming 502. 但测试时 anchor gateway 返回 400 'Unknown model: anchor high'.
+Public product 只有 'anchor' 和 'anchor-image', 没有 'anchor high' (那是 codex CLI 显示字符串,
+不是真的 anchor model 名字).
+
+直接 curl /v1/responses stream 用 'anchor' 模型 + 全 codex-shape payload 工作正常,
+但 codex CLI 0.146.0 走同样路径 502s. 推测是 anchor server.py:73217
+_v1_responses_stream_gen 在 in-flight JSONResponse (vendor cascade exhausted) 上挂掉,
+需要 anchor repo 修.
+
+=== 修法 ===
+dispatch_batch.py codex 分支 revert 到默认:
+- 不加 -m, 让 codex 读 config.toml 的 model = 'anchor'
+- task.get('model') 仍可显式覆盖 (用于测试时指定其他模型)
+
+=== 派单时 codex 行为 (revert 后) ===
+- 默认: codex config.toml 决定 model, base_url = http://127.0.0.1:8088/v1
+- /v1/responses streaming 502 cascade 仍存在 (anchor 上游 bug)
+- 工作流影响: codex worker 任务在 dispatcher.py 当前会 exit 1 + verify 失败,
+  不会假装成功 (v29.2.1 verify-after-exit 修复已生效)
+
+=== PATCH ===
+diff --git a/scripts/dispatch_batch.py b/scripts/dispatch_batch.py
+index 9d00e99..8b31988 100755
+--- a/scripts/dispatch_batch.py
++++ b/scripts/dispatch_batch.py
+@@ -18,14 +18,19 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
+     if engine == "shell":
+         return list(task.get("argv", []))
+     if engine == "codex":
+-        return [
+-            "codex",
+-            "exec",
+-            "--skip-git-repo-check",
+-            "-C",
+-            task.get("workdir", "."),
+-            prompt,
+-        ]
++        # v29.4 (reverted): tried -m 'anchor high' to bypass anchor-auto router /v1/responses
++        # streaming 502, but 'anchor high' is NOT a valid anchor model (gateway returns 400
++        # 'Unknown model'). Reverted to default behavior — codex reads model from
++        # config.toml ([model_providers.anchor] base_url=http://127.0.0.1:8088/v1).
++        # The /v1/responses streaming 502 is an anchor gateway bug (server.py:73217
++        # _v1_responses_stream_gen in-flight JSONResponse handling), NOT a hermes-fleet
++        # issue. Fix lives in anchor repo, not hermes-fleet. dispatch_batch.py codex
++        # branch stays minimal — let config.toml decide.
++        codex_args = ["codex", "exec", "--skip-git-repo-check"]
++        if "model" in task:
++            codex_args.extend(["-m", task["model"]])
++        codex_args.extend(["-C", task.get("workdir", "."), prompt])
++        return codex_args
+     if engine == "pi":
+         return [
+             "pi-anchor",
+

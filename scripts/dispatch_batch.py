@@ -18,14 +18,19 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
     if engine == "shell":
         return list(task.get("argv", []))
     if engine == "codex":
-        return [
-            "codex",
-            "exec",
-            "--skip-git-repo-check",
-            "-C",
-            task.get("workdir", "."),
-            prompt,
-        ]
+        # v29.4 (reverted): tried -m 'anchor high' to bypass anchor-auto router /v1/responses
+        # streaming 502, but 'anchor high' is NOT a valid anchor model (gateway returns 400
+        # 'Unknown model'). Reverted to default behavior — codex reads model from
+        # config.toml ([model_providers.anchor] base_url=http://127.0.0.1:8088/v1).
+        # The /v1/responses streaming 502 is an anchor gateway bug (server.py:73217
+        # _v1_responses_stream_gen in-flight JSONResponse handling), NOT a hermes-fleet
+        # issue. Fix lives in anchor repo, not hermes-fleet. dispatch_batch.py codex
+        # branch stays minimal — let config.toml decide.
+        codex_args = ["codex", "exec", "--skip-git-repo-check"]
+        if "model" in task:
+            codex_args.extend(["-m", task["model"]])
+        codex_args.extend(["-C", task.get("workdir", "."), prompt])
+        return codex_args
     if engine == "pi":
         return [
             "pi-anchor",
