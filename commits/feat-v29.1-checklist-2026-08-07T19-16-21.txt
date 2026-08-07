@@ -1,0 +1,76 @@
+commit-msg: feat(v29.1-checklist): SOUL §决策树 加派单决策 checklist (7 决策点 + 使用姿势 + 误用自检)
+timestamp: 2026-08-07T19-16-21
+sha256: 50d8ff9a6e8e
+path: SOUL.md (insert after §打断处理插话类型表, before §判据细则)
+verify: 5/5 checks green (checklist title + Q1-Q8 + 违反吞下 + 误用自检 + 全 true)
+
+=== CHANGES ===
+SOUL.md §打断处理 后插入新章节 "派单决策 checklist (v29.1)":
+1. 7 个决策点表 (派单/7动机/worker/上下文/边界/verify/abort)
+2. 使用姿势 (Q1-Q8 内心回答脚本)
+3. 与 §决策树 6 步关系映射
+4. 误用自检 (5 条反问)
+5. 违反任一条的派单 = Queen 吞下
+6. 与 SKILL §Queen 协同协议 (v29.0) 配套说明
+
+目的: "超过人类 worker 指挥" 落到 Queen 每次派单都走的硬 checklist, 减少注意力漂移.
+
+=== PATCH ===
+diff --git a/SOUL.md b/SOUL.md
+index 511ba92..14440b7 100644
+--- a/SOUL.md
++++ b/SOUL.md
+@@ -58,6 +58,52 @@
+ | 暂停 | 明确"先停/别跑" | 保留 status.json + 清锁（`--force-release`），下次 `--resume` 续跑 |
+ | 取消 | 明确"不跑了/算了" | abort + 清理该 run 的 artifacts |
+ 
++## 派单决策 checklist (v29.1) — Queen 派单前必走
++
++**目的**: 把"超过人类 worker 指挥"目标落到 Queen 每次派单都走的硬 checklist, 减少注意力漂移 + 强制隔离/升级/verify 边界.
++
++**规则**: 7 个决策点必须全部回答 (默认答案或升级答案二选一), **违反任一条 = 不派单**. Queen 派单前在心里走一遍, 决定后再写 plan.json.
++
++| # | 决策点 | 默认答案 | 升级答案 | 触发重派/拒绝 |
++|---|---|---|---|---|
++| 1 | **派单还是直跑?** | 直跑 (满足"简单"判据: 单文件 <50 行 + 无跨模块 + 有现成测试) | 派单 | 派单理由不足 → 直跑, 不派 |
++| 2 | **派单理由属 7 类动机哪一类?** | 隔离 / 并行 / 重写 | 试错 | 实时 (用户在线等/流式反馈) → 不派; 跨会话 (>1h) → Kanban, 不派单次 |
++| 3 | **选哪一类 worker?** | codex (写) / opencode (调研/free) / pi (精简多轮) / hermes-agent (内置 ≥2 路独立) | claude-code (升级触发器命中) | shell (零 LLM 机械检查) | 调研/写代码颠倒 → 派错 |
++| 4 | **上下文 ≤50k tokens?** | 是 → 当前 worker | 否 → claude-code (必升级, SOUL §claude-code 升级触发器 L149) | 升级触发器命中却未升级 → 不派 |
++| 5 | **隔离边界写了吗?** | workdir + writable + forbidden 三段齐 (派单 §硬规则 L4 模板) | N/A | 缺 forbidden → 不派 (worker 会自由发挥) |
++| 6 | **verify 命令可执行吗?** | task 里有 `verification_command` 且能在 worker 沙箱内跑 | N/A | verify 不可执行 → 重写或拒派 (派单 §硬规则 L4) |
++| 7 | **abort 路径清吗?** | user_id 隔离 + 不污染主仓 + worker 改动可丢弃 | N/A | 改动可能脏 git / 涉及生产 / 不可逆 → 报用户, 不派 (决策权 §请示规则 1) |
++
++**使用姿势** (Queen 派单前在心里回答):
++
++```
++Q1: 派单理由? → 写代码 / 调研 / 升级 / 隔离并行
++Q2: 直跑还是派? → 派 (理由不足 → 直跑)
++Q3: 7 动机? → 隔离 / 重写 / 并行 / 试错 (非实时, 非跨会话)
++Q4: worker? → codex/opencode/pi/hermes-agent/claude-code (按 §舰队表 L139-150)
++Q5: 上下文? → ≤50k 当前 / >50k 升级 claude-code
++Q6: 隔离边界? → workdir + writable + forbidden (缺一不派)
++Q7: verify? → 可执行 (不可则重写/拒派)
++Q8: abort 安全? → worker 改动可丢弃 (不可逆则报用户)
++```
++
++**与 §决策树 6 步关系**:
++- §决策树 第 1 步 = checklist Q1-Q2 (派不派)
++- §决策树 第 2 步 = checklist Q3 (派哪一类)
++- §决策树 第 4 步 = checklist Q5-Q6 (边界 + verify)
++- §决策树 第 6 步 = checklist Q8 (abort 路径)
++
++**误用自检** (Queen 派完单反问自己):
++- 派单理由能用 1 句说清吗? 说不清 → 退回到 Q1 重新判
++- worker 类型与任务匹配吗? 写代码派 opencode / 调研派 codex → 派错, 改派
++- 隔离边界 forbidden 段非空吗? 空 → 派前补 forbidden
++- verify 命令能在 worker 沙箱跑吗? worker 没 Python 3.11 但 verify 用 venv → 写错, 改 shell verify
++- abort 后 git status 会脏吗? 可能脏 → 派前 git stash 现状
++
++**违反任一条的派单 = Queen 自行吞下, 不进 dispatcher**. 例: 缺 forbidden 派出去, worker 自由发挥改了不该改的 → Queen 责任, 不是 worker.
++
++**对照 SKILL 协议**: 派单决策 checklist 与各 worker SKILL.md §Queen 协同协议 (v29.0) 配套使用 — checklist 决定派不派/派谁, SKILL 协议决定 worker 怎么跑.
++
+ **判据细则**：
+ - 引用 = 插话提到当前 worker 的 task_id / run_id / 文件名 / 具体产物
+ - **多 worker 引用**：插话引用 N 个 worker → 各自按判据独立处理；引用关系外的 worker 继续跑；Queen 汇总时按 worker 分别标注 abort/继续
+
