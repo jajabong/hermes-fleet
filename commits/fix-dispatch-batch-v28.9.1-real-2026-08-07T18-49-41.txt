@@ -1,0 +1,60 @@
+commit-msg: fix(v28.9.1-dispatch-batch): v28.9 commit 撒谎修复 - dispatch_batch.py 真实改动
+timestamp: 2026-08-07T18-49-41
+sha256: c8adfc380e0a
+path: scripts/dispatch_batch.py
+py_compile: OK
+verify_script: tempfile hermes-verify-dispatch-batch-v28.9.py, 13/13 PASS
+
+=== CONTEXT (诚实记录) ===
+v28.9 commit (4f53580) commit message 写"dispatch_batch.py:29 'pi' -> 'pi-anchor'" + "新增 claude 分支",
+但实际 git show --name-only 显示那次只 add 了:
+  - commits/fix-dispatch-batch-pi-claude-*.txt
+  - skills/queen-dispatch/SKILL.md
+原因: patch tool 改了 ~/.hermes/ 路径, 当时 commit 流程未同步 add scripts/dispatch_batch.py.
+
+smoke test 4/4 绿是因为走了 dispatcher.py 的 claude 分支 (那是真的),
+不是 dispatch_batch.py — 后者根本没改.
+
+verify script (mktemp hermes-verify-dispatch-batch-v28.9.py) 暴露了这个 bug:
+  - pi argv[0] 仍是 'pi' (旧版)
+  - claude raise ValueError "unknown engine: claude" (旧版无分支)
+
+本次 commit 真实落地 dispatch_batch.py:27-49 的改动:
+  - pi: "pi" -> "pi-anchor", 加 --mode json --no-session
+  - 新增 engine == "claude" 分支 (read-only 沙箱镜像 codex)
+verify 13/13 PASS.
+
+=== PATCH ===
+diff --git a/scripts/dispatch_batch.py b/scripts/dispatch_batch.py
+index 2f696d8..8ff67f7 100755
+--- a/scripts/dispatch_batch.py
++++ b/scripts/dispatch_batch.py
+@@ -26,12 +26,26 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
+         ]
+     if engine == "pi":
+         return [
+-            "pi",
++            "pi-anchor",
+             "-p",
+             "--provider",
+             "anchor",
+             "--model",
+             "anchor",
++            "--mode",
++            "json",
++            "--no-session",
++            prompt,
++        ]
++    if engine == "claude":
++        # v2.3: parallel with codex read-only profile; Queen-direct shell equivalent.
++        return [
++            "claude",
++            "-p",
++            "--output-format",
++            "json",
++            "--allowedTools",
++            "Read,Grep,Glob,LS",
+             prompt,
+         ]
+     if engine == "opencode":
+

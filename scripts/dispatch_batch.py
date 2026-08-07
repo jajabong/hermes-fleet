@@ -26,12 +26,26 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
         ]
     if engine == "pi":
         return [
-            "pi",
+            "pi-anchor",
             "-p",
             "--provider",
             "anchor",
             "--model",
             "anchor",
+            "--mode",
+            "json",
+            "--no-session",
+            prompt,
+        ]
+    if engine == "claude":
+        # v2.3: parallel with codex read-only profile; Queen-direct shell equivalent.
+        return [
+            "claude",
+            "-p",
+            "--output-format",
+            "json",
+            "--allowedTools",
+            "Read,Grep,Glob,LS",
             prompt,
         ]
     if engine == "opencode":
