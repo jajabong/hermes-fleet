@@ -170,7 +170,33 @@ Worker：短生命周期 task 默认 10min / 硬上限 60min / 3600s 留给人�
 
 预算：task 默认 10min / 硬上限 60min / 3600s 留给人工长 task / 同 finding 修复 ≤2 轮 / run-end replan (run_status ∈ {partial_success,failed}) / 每 1h checkpoint. 计数规则见 "轮" 定义.
 
-Queen 持续工作：用户新消息并行处理；与当前 worker 文件冲突时排队；同 run 多完成事件由 Event Hub (`events.jsonl`) 聚合；notify.jsonl 是 dispatcher 短路输出，**不**经 Event Hub. 用户插话打断 → 见上文"打断处理"表.
+## Hermes 工具速查 (v29.5) — Queen 可直接调的 hermes 命令
+
+`hermes agent` 自带 67 个子命令 + 26 个 builtin toolset, 我们 Queen-mode 主要用 §舰队表 6 类 subagent + skills/memory. 这里列**未发挥但可立刻用**的高 ROI 命令 (按 §调研 v29.5):
+
+| 命令 | 状态 | 用途 | 何时用 |
+|---|---|---|---|
+| `hermes kanban` | **read-only** (Queen-mode) | SQLite 持久任务, 33 子命令 (init/boards/create/swarm/assign/claim/complete/dispatch/daemon) | **⚠ Queen 是 delegate_task child, 写 Kanban 被 hermes 拒**: "delegate_task child contexts cannot mutate Kanban tasks". Queen 只能 READ via queen_state.py kanban --task-id. WRITE 必须 main hermes session (Henry 在主 chat 调 `hermes kanban create ...` 才能写) |
+| `hermes cron` | idle (目录已建 ~/.hermes/cron/) | 定时调度, 14 子命令 (list/create/edit/pause/resume/run/runs/history/tick) | 周期任务: e.g. nightly hermes insights 报告 |
+| `hermes insights` | `[USED 7d]` | session 历史 token 成本 + top tools + top skills | Queen 决策"哪个 worker 高 ROI" 时跑 |
+| `hermes monitoring` | enabled | OTLP service health metrics + redacted diagnostics | hermes-fleet 集成它替代自己写的 hermes-fleet/monitoring |
+| `hermes doctor --fix` | ✓ all pass | setup verification + auto-fix | CI / setup 验证 |
+| `hermes journey` | idle | learned skill timeline + memory graph 可视化 | 回顾派单 pattern 找改进点 |
+| `hermes memory setup` | enabled | external provider (honcho/openviking/mem0/hindsight/retaindb/byterover) | 多 profile 共享 memory 时 |
+| `hermes skills bundles/plugins/curator` | enabled | skill 集合管理 (vs 单个 skill_manage) | 一次性装一组相关 skill |
+| `hermes mcp` | enabled | MCP server 增删 (agentmemory 已自动注册) | 加新 MCP 时 |
+| `hermes tools enable web/x_search/video` | disabled | 调研类工具 | hermes-fleet 已有 opencode 替代, ROI 低 |
+| `hermes session_search` / `context_engine` | disabled | 跨 session history + 大 context 处理 | 调试复杂 bug + 升级 claude-code 时 |
+| `hermes web/portal/serve/desktop/gui/migrate/proxy` | enabled | 多渠道 (Telegram/Discord/WhatsApp/web portal/desktop) + 反向代理 | 远端 hermes-os 项目用, 本地 CLI 不需 |
+
+**Queen 决策规则** (v29.5 起):
+- 任务跨 session (>1h) → `hermes kanban` (持久, 重启可续) — **Queen 不能直接调, 让 main hermes session 调**
+- 任务单次 ≤1h → `dispatcher.py` (DAG, in-memory, run 完成即结束)
+- 调研/复盘 → `hermes insights` / `hermes journey` (统计 + 可视化)
+- 周期任务 → `hermes cron` (e.g. nightly hermes insights)
+- 派 worker 失败 (rate_limited) → 通知 Henry 在 main hermes session 调 `hermes kanban claim` 让别的 session/profile 接
+
+## §Queen 架构观察 (v29.2) — 派单暴露的架构问题日志
 
 ## 汇报阈值
 
