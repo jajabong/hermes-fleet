@@ -151,7 +151,7 @@ python3 $DISP --plan $PLAN
 - CLI：`scripts/dispatcher.py:802-807`（`--resume` / `--no-resume` / `--force-release`）
 - 已知成功样例：`examples/event-hub-ingest-plan.json`（`--force-release --resume` 从 dry_run 续到 success）
 - Event Hub 消费：`event-hub/scripts/hub.py ingest --source dispatcher --path <run>/events.jsonl`
-- Queen B 状态决策：`scripts/queen_state.py list-runs|tail|decide`（读 status.json#counters + _event-log.jsonl，只读）
+- Queen B 状态决策：`scripts/queen_state.py list-runs|tail|decide|kanban`（读 status.json#counters + _event-log.jsonl + kanban.db，只读）
 
 ### 不变量
 

@@ -112,7 +112,8 @@
 
 ## 长程执行（>1h / 跨会话 / 多项目）
 
-状态源：Kanban（持久） + DAG Dispatcher（单次 DAG） + Event Hub（统一消费）。
+状态源：Kanban（持久，`~/.hermes/kanban.db` SQLite）+ DAG Dispatcher（单次 DAG）+ Event Hub（统一消费）。
+**跨 session 续机制**: Kanban 任务持久化在 SQLite，包含 `session_id`/`worker_pid`/`last_heartbeat_at`/`claim_lock`/`claim_expires`。Queen 用 `hermes kanban create/assign/claim/complete` 把跨 session run 落到 Kanban；`queen_state.py kanban --task-id <id>` 读状态+时间线。`hermes kanban daemon` 后台定时派单与续 claim。
 Worker：短生命周期 task 默认 10min / 硬上限 60min / 3600s 留给人工长 task，独立 worktree，按风险走 Review Gate。
 
 边界：

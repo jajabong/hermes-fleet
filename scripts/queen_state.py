@@ -127,9 +127,47 @@ def cmd_decide(args) -> int:
     return 0
 
 
+
+
+def cmd_kanban_tail(args) -> int:
+    """Show tail of a kanban task: status + session_id + last events."""
+    db = Path.home() / ".hermes" / "kanban.db"
+    if not db.exists():
+        print("no kanban.db yet (run `hermes kanban init`)")
+        return 0
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT id, title, status, assignee, session_id, workspace_path, "
+            "created_at, started_at, completed_at FROM tasks WHERE id = ?",
+            (args.task_id,)).fetchone()
+        if not row:
+            print(f"no task {args.task_id}")
+            return 2
+        for k in ("id", "title", "status", "assignee", "session_id",
+                  "workspace_path", "created_at", "started_at", "completed_at"):
+            print(f"  {k:<16} {row[k]}")
+        events = conn.execute(
+            "SELECT kind, created_at, payload FROM task_events "
+            "WHERE task_id = ? ORDER BY id DESC LIMIT ?",
+            (args.task_id, args.limit)).fetchall()
+        if events:
+            print(f"--- last {len(events)} events ---")
+            for e in events:
+                print(f"  {e['created_at']}  {e['kind']:<20}")
+    finally:
+        conn.close()
+    return 0
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Queen B 状态决策 (v28)")
     sub = p.add_subparsers(dest="cmd", required=True)
+    pk = sub.add_parser("kanban-tail")
+    pk.add_argument("--task-id", required=True)
+    pk.add_argument("--limit", type=int, default=10)
+    pk.set_defaults(func=cmd_kanban_tail)
     pl = sub.add_parser("list-runs")
     pl.add_argument("--limit", type=int, default=10)
     pl.set_defaults(func=cmd_list_runs)
@@ -142,6 +180,10 @@ def parse_args(argv=None):
     pd.add_argument("--finding-key", required=True,
                    help="<task_id>:<fp8>")
     pd.set_defaults(func=cmd_decide)
+    pk = sub.add_parser("kanban")
+    pk.add_argument("--task-id", required=True)
+    pk.add_argument("--limit", type=int, default=10)
+    pk.set_defaults(func=cmd_kanban_tail)
     return p.parse_args(argv)
 
 
