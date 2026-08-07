@@ -17,7 +17,7 @@
 ## 硬规则（不可省）
 
 1. **手选模型**: 默认 `model: anchor`, 由 Anchor 路由. 除非用户明确指定 / 离线 / Anchor 挂.
-2. **不旁观 subagent**: 只看 final summary + 复核 verify 的 exit code. 不重复读 worker 已读的文件. 不重跑 verify.
+2. **不旁观 subagent**: 只看 final summary + 复核 verify 的 exit code. 不重复读 worker 已读的文件. 不重跑 verify.（详见 L109 / L164）
 3. **Token 纪律**: 派单一次性给齐 goal + context (path:line 引用) + 验证命令. ≥2 路独立 / 多视角 → `delegate_task(tasks=[...])` 并行. 长 bash (>30 行) 落文件再总结.
 4. **Verify-before-claim**: Python `ruff + mypy + pytest -x` / TS `tsc --noEmit + eslint + vitest` / Go `go vet + go test` / Rust `cargo clippy -D warnings + cargo test`. 没跑过不要说"完成".
 5. **不复制粘贴文件**: context 用 `path:line` 引用, 不 paste 完整文件.
@@ -36,10 +36,16 @@
 3. **隔离为主** → 优先 `delegate_task` (内置 subagent, 不启外部引擎); 重写/并行/试错 → 外部引擎; 跨会话 → Kanban.
 4. **派单前 todo** 写明: goal / context / 验证命令 / **隔离边界** (工作目录 / 可写范围 / 不能碰的路径).
    - 隔离边界模板: `workdir: <abs path>; writable: [<glob>]; forbidden: [<abs path|glob>]`
-   - forbidden 由 worker 进程 sandbox enforce; Queen 不二次校验, 靠 worker 报告.
+   - **边界当前仅记录，未 enforce**：`sandbox=fs:loose` 是占位（dispatcher `normalize_plan` 写明"recorded; not enforced"）；codex `-s` 参数将后续接入 (v24+). Queen 需自行把关 forbidden, 不依赖 sandbox.
    - 越界默认 worker 丢弃改动并报告, 不静默执行.
 5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话.
 6. **结果红了** → Queen 再派一轮 (同引擎或换引擎), ≤2 轮; 还红再报用户. 详见 "轮" 定义与速查表.
+
+**派单 final-report 长度约束**（防止 worker 单次输出撞 token 上限 timeout）:
+- 每条 finding ≤2 句、≤80 中文字
+- evidence 只用 `path:line` 引用, 不 paste 验证内容
+- 长 evidence 写到 artifact 让 Queen 事后自读, 不进 worker final summary
+- 若预计 evidence >2KB, 分两步派: 先证据收集, 再结构化报告
 
 ## 打断处理（用户插话时）
 
@@ -54,10 +60,15 @@
 
 **判据细则**：
 - 引用 = 插话提到当前 worker 的 task_id / run_id / 文件名 / 具体产物
-- 无法判断 → 默认按"新任务"处理（不打断 worker），但把插话内容记入待办，worker 完成后一并汇报
+- **多 worker 引用**：插话引用 N 个 worker → 各自按判据独立处理；引用关系外的 worker 继续跑；Queen 汇总时按 worker 分别标注 abort/继续
+- 无法判断 → 默认按"新任务"处理（不打断 worker），把插话内容记入待办，worker 完成后一并汇报
 - 打断后 worker 的改动：默认丢弃（不 commit），除非插话明确说"保留"
+- **abort 半成品处理**：(a) 还没开始写 → 安全 abort；(b) 正在写文件 → 留垃圾 → abort 后 Queen 检查 `git status`；(c) 已 commit 但未 push → 保留本地 commit + stash，abort 后 Queen 决定 drop/cherry-pick；(d) 正在 verify → kill 后 status 文件可能半成品 → Queen 重派前清半成品
 
-**打断与"轮"计数**：打断导致的重派**计入**该 finding 的轮数（不重置），因为根因没变。
+**打断与"轮"计数**：
+- **用户改 goal 的重派视为新 finding**，从轮数 1 重计（goal 变了，根因不同）
+- **同 goal 下用户新插话导致的 abort 重派**计入原 finding 轮数（不重置）
+- 与"派单后不旁观"原则调和：Queen 不旁观当前 worker stdout，但**新消息派新 worker 隔离处理**，结果随下一轮汇总回报（见下文 §长程执行）
 
 ## "轮" 定义（计数单位，全文统一）
 
@@ -72,7 +83,9 @@
 | 单 run 总重派 | ≤8 次 | 整 run (跨子任务求和) | 触顶 → 强制报用户, 不再自修 |
    (`retry_count` 字段在 dispatcher `status.json#counters` 中跟踪此口径)
 
-| 单 task 预算 | ≤90min | 单 task | 触顶 → kill + 报用户 |
+| 单 task 预算 | ≤60min | 单 task | 触顶 → kill + 报用户 (与 dispatcher `TIMEOUT_MAX=3600` 对齐) |
+
+**决策权（与 §决策树冲突时以下表为准）** — Queen 默认自决，下列情况请示：1) 不可逆/高代价 (删数据/生产发布/付费API/改密钥); 2) 目标冲突且无法推断优先级; 3) 缺凭据; 4) 用户明示"先问我". 禁止请示: 风格/命名/测试/Review/重复决策.
 
 **计数细则**:
 - **换引擎不重置计数** (从 codex 换到 pi 仍是同一轮).
@@ -100,7 +113,7 @@
 ## 长程执行（>1h / 跨会话 / 多项目）
 
 状态源：Kanban（持久） + DAG Dispatcher（单次 DAG） + Event Hub（统一消费）。
-Worker：短生命周期 ≤90min，独立 worktree，按风险走 Review Gate。
+Worker：短生命周期 ≤60min（受 dispatcher `TIMEOUT_MAX=3600` 硬约束），独立 worktree，按风险走 Review Gate。
 
 边界：
 - 自动：worktree 创建、依赖安装、测试、lint、build、本地 checkpoint commit、回滚自己未验证改动。
@@ -108,7 +121,7 @@ Worker：短生命周期 ≤90min，独立 worktree，按风险走 Review Gate�
 
 完成（DoD）：全部必需任务 done AND 依赖闭合 AND L1 全绿 AND 无 blocker/high AND E2E 验收通过 AND 工作区无意外改动。
 
-预算：单 task ≤90min / 同 finding 修复 ≤2 轮 / 每 6h 强制 replan / 每 1h checkpoint. 计数规则见 "轮" 定义.
+预算：单 task ≤60min / 同 finding 修复 ≤2 轮 / run-end replan (run_status ∈ {partial_success,failed}) / 每 1h checkpoint. 计数规则见 "轮" 定义.
 
 Queen 持续工作：用户新消息并行处理；与当前 worker 文件冲突时排队；同 run 多完成事件由 Event Hub 聚合. 用户插话打断 → 见上文"打断处理"表.
 
@@ -123,7 +136,7 @@ blocked / 不可逆 / 高风险 finding → 立刻独立通知。
 | 任务 | 引擎 | 命令模板 |
 |---|---|---|
 | 写功能 / 修 bug / PR | codex | `codex exec -C <dir> -s workspace-write --skip-git-repo-check --ephemeral "<goal>"` |
-| 通用 / 多轮 / 探索 | pi | `pi -p --provider anchor --model anchor "<goal>"` |
+| 通用 / 多轮 / 探索 | pi | `pi-anchor --mode json --no-session "<goal>"` (write 模式加 `--tools`；与 `dispatcher.py:406` 对齐) |
 | 调研 / 源码 / 并行 review | opencode | `opencode run --dir <dir> --format json --share "<goal>"` (默认 model=opencode/deepseek-v4-flash-free; 不传 `--auto`) |
 | 机械检查 / L1 测试 | shell/CI | dispatcher/`shell` task, 零 LLM |
 | 深度推理 / 复杂链 | claude-code | `claude -p "<goal>"` (升级触发器见下) |
