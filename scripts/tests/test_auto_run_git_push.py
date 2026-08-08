@@ -146,12 +146,39 @@ class CmdGitPushTests(unittest.TestCase):
             self.assertEqual(r["tier_used"], 1)
             self.assertFalse(r["retried"])
 
-    def test_T_pattern_regex_matches_three_signals(self):
-        """T-pattern: _PUSH_RETRY_PATTERN matches the three documented signals."""
+    def test_T_curl_connect_failure_triggers_retry(self):
+        """T-curl-connect: Tier 1 fails with curl 'Failed to connect' stderr → Tier 2."""
+        from unittest.mock import patch as _patch, MagicMock
+
+        with self._td() as td:
+            _, work = _make_local_remote(Path(td))
+            # Mocked stderr matches the real-world curl failure seen on hermes-wiki.
+            t1_result = MagicMock(
+                returncode=128,
+                stdout="",
+                stderr="fatal: unable to access 'https://github.com/x/y.git/': "
+                       "Failed to connect to github.com port 443 after 75021 ms: "
+                       "Couldn't connect to server",
+            )
+            t2_result = MagicMock(returncode=0, stdout="Everything up-to-date\n", stderr="")
+            with _patch("subprocess.run", side_effect=[t1_result, t2_result]) as mock_run:
+                r = auto_run.cmd_git_push(str(work), remote="origin", branch="main")
+
+            self.assertEqual(mock_run.call_count, 2,
+                             f"expected Tier 2 retry, got {mock_run.call_count} calls")
+            self.assertTrue(r["retried"], "should retry on curl connect failure")
+            self.assertEqual(r["tier_used"], 2)
+            self.assertEqual(r["exit"], 0, f"stderr: {r.get('stderr')}")
+            self.assertIn("Failed to connect", r["tier1_stderr"])
+
+    def test_T_pattern_regex_matches_five_signals(self):
+        """T-pattern: _PUSH_RETRY_PATTERN matches the five documented signals."""
         signals = [
             "SSL_ERROR_SYSCALL in connection to github.com:443",
-            "fatal: unable to access ... connect to github.com 443 timeout",
+            "fatal: unable to access ... Failed to connect to github.com port 443 after 75021 ms: Couldn't connect to server",
+            "LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to github.com:443",
             "Connection reset by peer",
+            "fatal: unable to access ... Connection timed out",
         ]
         for s in signals:
             self.assertIsNotNone(

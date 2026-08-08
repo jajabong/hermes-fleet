@@ -257,7 +257,7 @@ def cmd_memory_save(label: str, content: str) -> dict:
 # v29.8 git-push 2-tier fallback retry pattern.
 # Tier 1 (unset proxy) fails with any of these stderr signals → try Tier 2 (force proxy).
 _PUSH_RETRY_PATTERN = re.compile(
-    r"SSL_ERROR_SYSCALL|github.*443.*timeout|connection.*reset",
+    r"SSL_ERROR_SYSCALL|Failed to connect.*github.*443|Couldn't connect to server|connection.*reset|connect.*timed out",
     re.IGNORECASE,
 )
 
@@ -292,8 +292,10 @@ def cmd_git_push(repo_dir: str, remote: str = "origin", branch: str = "main") ->
     Fix: 2-tier fallback.
       Tier 1: unset all 8 proxy env vars + git -c http.proxy= -c https.proxy=
               (override ~/.gitconfig [http] proxy).
-      Tier 2: if Tier 1 exits non-zero AND stderr matches
-              "SSL_ERROR_SYSCALL|github.*443.*timeout|connection.*reset",
+      Tier 2: if Tier 1 exits non-zero AND stderr matches the retry pattern
+              (SSL_ERROR_SYSCALL | "Failed to connect.*github.*443" |
+               "Couldn't connect to server" | "connection.*reset" |
+               "connect.*timed out"),
               retry with -c http.proxy=http://127.0.0.1:7897 + per-URL override
               -c http.https://github.com.proxy=http://127.0.0.1:7897.
               (mihomo proxy must be active — verified manually 2026-08-08.)
