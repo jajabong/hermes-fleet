@@ -270,6 +270,13 @@ def cmd_git_push(repo_dir: str, remote: str = "origin", branch: str = "main") ->
               "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
               "no_proxy", "NO_PROXY"):
         env.pop(k, None)
+    repo_dir = os.path.expanduser(repo_dir)
+    if not os.path.isdir(repo_dir):
+        return {"task": "git-push", "repo_dir": repo_dir, "exit": 1,
+                "error": f"not a directory: {repo_dir}"}
+    if not os.path.isdir(os.path.join(repo_dir, ".git")):
+        return {"task": "git-push", "repo_dir": repo_dir, "exit": 1,
+                "error": f"not a git repo: {repo_dir}"}
     try:
         proc = subprocess.run(
             ["git", "-c", "http.proxy=", "-c", "https.proxy=",
