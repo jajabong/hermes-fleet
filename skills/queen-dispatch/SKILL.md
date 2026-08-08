@@ -34,6 +34,7 @@ results = dispatch_batch(tasks=[
 - codex → `codex exec --skip-git-repo-check -C <workdir> "<goal>+context"`
 - pi → `pi-anchor -p --provider anchor --model anchor --mode json --no-session "<goal>+context"` (Hermes-flavored wrapper)
 - opencode → `opencode run --format json --dir <workdir> "<goal>+context"`（默认 model=`kilocode/kilo-auto/free`; 备选 `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free`; 不传 --auto）
+- **audit/调研优先派 opencode** (kilocode/kilo-auto/free), 不用 delegate_task/anchor, 避免 minimax-m3 HTTP 424 all_workers_failed. 仅 write tasks (patch SOUL/auto_run) 用 delegate_task 或 codex (Queen 架构问题 P1 #12)
 
 ## 不要
 - 不要 paste 完整文件到 context（用 path:line）
