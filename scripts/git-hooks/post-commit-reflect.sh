@@ -48,4 +48,24 @@ if echo "$MSG" | grep -qE "Queen 架构观察"; then
 fi
 echo "" >> "$LOG"
 
+# 6. SKILL.md auto-sync (repo skills/ → ~/.hermes/skills/)
+echo "--- SKILL.md auto-sync ---" >> "$LOG"
+SKILL_CHANGES=$(git diff-tree --no-commit-id --name-only -r HEAD 2>&1 | grep '^skills/.*/SKILL.md$' || true)
+if [ -n "$SKILL_CHANGES" ]; then
+  SYNC_COUNT=0
+  for skill_file in $SKILL_CHANGES; do
+    target="$HOME/.hermes/skills/${skill_file#skills/}"
+    if [ -f "$skill_file" ]; then
+      mkdir -p "$(dirname "$target")"
+      cp "$skill_file" "$target"
+      echo "Synced: $skill_file -> $target" >> "$LOG"
+      SYNC_COUNT=$((SYNC_COUNT + 1))
+    fi
+  done
+  echo "SKILL.md synced: $SYNC_COUNT file(s)" >> "$LOG"
+else
+  echo "SKILL.md changes: none" >> "$LOG"
+fi
+echo "" >> "$LOG"
+
 echo "Log: $LOG"

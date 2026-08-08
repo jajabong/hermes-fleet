@@ -64,15 +64,15 @@
 
 **规则**: 7 个决策点必须全部回答 (默认答案或升级答案二选一), **违反任一条 = 不派单**. Queen 派单前在心里走一遍, 决定后再写 plan.json.
 
-| # | 决策点 | 默认答案 | 升级答案 | 触发重派/拒绝 |
-|---|---|---|---|---|
-| 1 | **派单还是直跑?** | 直跑 (满足"简单"判据: 单文件 <50 行 + 无跨模块 + 有现成测试) | 派单 | 派单理由不足 → 直跑, 不派 |
-| 2 | **派单理由属 7 类动机哪一类?** | 隔离 / 并行 / 重写 | 试错 | 实时 (用户在线等/流式反馈) → 不派; 跨会话 (>1h) → Kanban, 不派单次 |
-| 3 | **选哪一类 worker?** | codex (写) / opencode (调研/free) / pi (精简多轮) / hermes-agent (内置 ≥2 路独立) | claude-code (升级触发器命中) | shell (零 LLM 机械检查) | 调研/写代码颠倒 → 派错 |
-| 4 | **上下文 ≤50k tokens?** | 是 → 当前 worker | 否 → claude-code (必升级, SOUL §claude-code 升级触发器 L149) | 升级触发器命中却未升级 → 不派 |
-| 5 | **隔离边界写了吗?** | workdir + writable + forbidden 三段齐 (派单 §硬规则 L4 模板) | N/A | 缺 forbidden → 不派 (worker 会自由发挥) |
-| 6 | **verify 命令可执行吗?** | task 里有 `verification_command` 且能在 worker 沙箱内跑 | N/A | verify 不可执行 → 重写或拒派 (派单 §硬规则 L4) |
-| 7 | **abort 路径清吗?** | user_id 隔离 + 不污染主仓 + worker 改动可丢弃 | N/A | 改动可能脏 git / 涉及生产 / 不可逆 → 报用户, 不派 (决策权 §请示规则 1) |
+| 决策点 | 默认答案 | 升级答案 | 触发重派/拒绝 |
+|---|---|---|---|
+| **派单还是直跑?** | 直跑 (满足"简单"判据: 单文件 <50 行 + 无跨模块 + 有现成测试) | 派单 | 派单理由不足 → 直跑, 不派 |
+| **派单理由属 7 类动机哪一类?** | 隔离 / 并行 / 重写 | 试错 | 实时 (用户在线等/流式反馈) → 不派; 跨会话 (>1h) → Kanban, 不派单次 |
+| **选哪一类 worker?** | codex (写) / opencode (调研/free) / pi (精简多轮) / hermes-agent (内置 ≥2 路独立) | claude-code (升级触发器命中) | shell (零 LLM 机械检查) | 调研/写代码颠倒 → 派错 |
+| **上下文 ≤50k tokens?** | 是 → 当前 worker | 否 → claude-code (必升级, SOUL §claude-code 升级触发器 L149) | 升级触发器命中却未升级 → 不派 |
+| **隔离边界写了吗?** | workdir + writable + forbidden 三段齐 (派单 §硬规则 L4 模板) | N/A | 缺 forbidden → 不派 (worker 会自由发挥) |
+| **verify 命令可执行吗?** | task 里有 `verification_command` 且能在 worker 沙箱内跑 | N/A | verify 不可执行 → 重写或拒派 (派单 §硬规则 L4) |
+| **abort 路径清吗?** | user_id 隔离 + 不污染主仓 + worker 改动可丢弃 | N/A | 改动可能脏 git / 涉及生产 / 不可逆 → 报用户, 不派 (决策权 §请示规则 1) |
 
 **使用姿势** (Queen 派单前在心里回答):
 
@@ -218,16 +218,6 @@ Worker：短生命周期 task 默认 10min / 硬上限 60min / 3600s 留给人�
 - 周期任务 → `hermes cron` (e.g. nightly hermes insights)
 - 派 worker 失败 (rate_limited) → 通知 Henry 在 main hermes session 调 `hermes kanban claim` 让别的 session/profile 接
 
-## §Queen 架构观察 (v29.2) — 派单暴露的架构问题日志
-
-| # | 严重度 | 问题 | 证据 | 修法 |
-|---|---|---|---|---|
-| 8 | P0 | **思考与执行脱节**: 5 轮思考里说"要派"但输出没调 delegate_task, 用户催 5 次"派了吗/为什么还不派" | 2026-08-08 会话 (Henry 连续催 5 次) | SOUL §决策树 L30 加"用户明确要求派单 → 强制派单"例外 + §checklist 加强制派单覆盖规则 (v29.8) |
-| 9 | P1 | **mihomo proxy SSL_ERROR_SYSCALL 不一致**: 同一会话内 hermes-fleet 推 push 成功, hermes-wiki 直连 SSL_ERROR_SYSCALL; 需 unset 8 个 proxy env vars + `-c http.proxy="" -c https.proxy=""` 才能推. **fix evolved: 2-tier fallback** — Tier 1 (unset) 失败且 stderr 含 `SSL_ERROR_SYSCALL\|github.*443.*timeout\|connection.*reset` 时自动 Tier 2 (`-c http.proxy=http://127.0.0.1:7897` + per-URL `-c http.https://github.com.proxy=...`) | 2026-08-08 commit f02871a push 220cb2d (Tier 1); 2026-08-08 hand-verify Tier 2 for hermes-wiki; auto_run.py 返回 `tier_used`/`retried` 字段 | auto_run.py 加 `cmd_git_push(repo_dir, remote, branch)` subcommand: 自动 unset env + git -c http.proxy=; 调用方只需 `auto_run.py git-push --repo-dir ~/hermes-wiki`. 后续 Queen + auto_run 推 hermes-wiki/hermes-fleet 都用这个 helper |
-| 10 | P0 | **delegate_task max_iterations 截断 (opencode 调研)**: 2 次确认 (deleg_4118f2ab 9 api calls, deleg_9b15e029, deleg_d1f5d49a 13 api calls), 调研类任务默认 50 turns 不够, 文件未落地 | 2026-08-08 worker-coverage audit, opencode-truncation-fix audit | (a) hermes-fleet SKILL.md queen-dispatch §不要 加 max_iterations 警示; (b) 派 audit/调研时 goal 显式 "≤6 tool calls 写完即收"; (c) data 给全避免 worker 自己 search 多次; (d) 长期: hermes-agent 工具签名加 max_iterations 参数 (需 upstream patch) |
-| 11 | P0 | **思考/执行脱节 + 派单前 prose 洪水**: 5+ 次 "派了吗/为什么还不派" 后才调 delegate_task; worker 返回后又写 3-4 段 prose 才派下一单; 思考里"要派"≠输出里 tool call | 2026-08-08 全天会话 (audit-v29.8-thinking-execution-desync.md 完整记录 6 次实例) | SOUL §决策树 L41 加"派单 prose 纪律": worker 返回 → 下一轮直接调工具, 派单前 ≤2 行 prose, 派单后 ≤1 行. 思考↔tool call 1:1. |
-| 12 | P1 | **delegate_task HTTP 424 (anchor all_workers_failed)**: minimax-m3 上游超时, 父 agent fallback_providers 注释在 config.yaml:176, 子 agent 继承空 chain | 2026-08-08 deleg_7e1b94a0 task-1 (claude-upgrade-trigger audit) 3 次重试 abort | (a) SOUL §决策树 加 "audit/调研类任务优先派 opencode (kilocode/kilo-auto/free) 不用 delegate_task/anchor"; (b) write tasks 才用 delegate_task; (c) 长期: 配 fallback_providers 到 minimax_CN_API_KEY_2 (非标准 key 名, 需 key_env 显式声明) |
-
 ## 汇报阈值
 
 普通完成 → 批量汇总。
@@ -314,7 +304,7 @@ L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两
 - 高频可执行工作流 (满足晋升) → `skill_manage(action="create")`
 - 用户偏好 / 稳定环境事实 → `~/.hermes/memories/`
 
-## §Queen 架构观察 (v29.2) — 派单暴露的架构问题日志
+## §Queen 架构观察 (v29.8) — 派单暴露的架构问题日志
 
 **目的**: 每次真派单暴露的 Queen 架构问题记在这里, 供下次派单前 Queen 主动检查 + 后续修 dispatcher/SKILL 时参考. 术语: 这是 **Queen 架构问题**, 不是"脚骨".
 
@@ -329,6 +319,11 @@ L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两
 | 5 | P0 | **Queen 没指定 Python 环境**: codex 自己建 venv 失败 (PEP 668) + pip 网络失败 | generate-ppt/stdout.log | plan 顶部声明 `python: hermes-python`; v29.1 checklist Q7 加 Python 解释器约束 |
 | 6 | P1 | **Queen 自己写大 JSON 截断**: 5 次 write_file 失败 (input size 上限) | 本会话 | 派单时让 worker 自己写 plan/工件 README, Queen 不手写大 JSON |
 | 7 | P2 | **hermes venv 与系统 python 共存**: codex 自己 find 到 `/Library/Frameworks/Python.framework/Versions/3.11/bin/python3` 才有 pptx | generate-ppt/stdout.log | plan 顶部声明 `python: hermes-python` 统一解释器 |
+| 8 | P0 | **思考与执行脱节**: 5 轮思考里说"要派"但输出没调 delegate_task, 用户催 5 次"派了吗/为什么还不派" | 2026-08-08 会话 (Henry 连续催 5 次) | SOUL §决策树 L30 加"用户明确要求派单 → 强制派单"例外 + §checklist 加强制派单覆盖规则 (v29.8) |
+| 9 | P1 | **mihomo proxy SSL_ERROR_SYSCALL 不一致**: 同一会话内 hermes-fleet 推 push 成功, hermes-wiki 直连 SSL_ERROR_SYSCALL; 需 unset 8 个 proxy env vars + `-c http.proxy="" -c https.proxy=""` 才能推. **fix evolved: 2-tier fallback** — Tier 1 (unset) 失败且 stderr 含 `SSL_ERROR_SYSCALL\|github.*443.*timeout\|connection.*reset` 时自动 Tier 2 (`-c http.proxy=http://127.0.0.1:7897` + per-URL `-c http.https://github.com.proxy=...`) | 2026-08-08 commit f02871a push 220cb2d (Tier 1); 2026-08-08 hand-verify Tier 2 for hermes-wiki; auto_run.py 返回 `tier_used`/`retried` 字段 | auto_run.py 加 `cmd_git_push(repo_dir, remote, branch)` subcommand: 自动 unset env + git -c http.proxy=; 调用方只需 `auto_run.py git-push --repo-dir ~/hermes-wiki`. 后续 Queen + auto_run 推 hermes-wiki/hermes-fleet 都用这个 helper |
+| 10 | P0 | **delegate_task max_iterations 截断 (opencode 调研)**: 2 次确认 (deleg_4118f2ab 9 api calls, deleg_9b15e029, deleg_d1f5d49a 13 api calls), 调研类任务默认 50 turns 不够, 文件未落地 | 2026-08-08 worker-coverage audit, opencode-truncation-fix audit | (a) hermes-fleet SKILL.md queen-dispatch §不要 加 max_iterations 警示; (b) 派 audit/调研时 goal 显式 "≤6 tool calls 写完即收"; (c) data 给全避免 worker 自己 search 多次; (d) 长期: hermes-agent 工具签名加 max_iterations 参数 (需 upstream patch) |
+| 11 | P0 | **思考/执行脱节 + 派单前 prose 洪水**: 5+ 次 "派了吗/为什么还不派" 后才调 delegate_task; worker 返回后又写 3-4 段 prose 才派下一单; 思考里"要派"≠输出里 tool call | 2026-08-08 全天会话 (audit-v29.8-thinking-execution-desync.md 完整记录 6 次实例) | SOUL §决策树 L41 加"派单 prose 纪律": worker 返回 → 下一轮直接调工具, 派单前 ≤2 行 prose, 派单后 ≤1 行. 思考↔tool call 1:1. |
+| 12 | P1 | **delegate_task HTTP 424 (anchor all_workers_failed)**: minimax-m3 上游超时, 父 agent fallback_providers 注释在 config.yaml:176, 子 agent 继承空 chain | 2026-08-08 deleg_7e1b94a0 task-1 (claude-upgrade-trigger audit) 3 次重试 abort | (a) SOUL §决策树 加 "audit/调研类任务优先派 opencode (kilocode/kilo-auto/free) 不用 delegate_task/anchor"; (b) write tasks 才用 delegate_task; (c) 长期: 配 fallback_providers 到 minimax_CN_API_KEY_2 (非标准 key 名, 需 key_env 显式声明) |
 
 **派单前 Queen 主动检查** (v29.2 起):
 - 写文件任务 → 检查 worker 是否允许 external_directory (opencode 需 --add-dir)
