@@ -38,7 +38,7 @@
    - 隔离边界模板: `workdir: <abs path>; writable: [<glob>]; forbidden: [<abs path|glob>]`
    - **边界 v28 已 enforce**：`sandbox=fs:loose` 默认 → codex `-s workspace-write`；`fs:read-only` → codex `-s read-only` (dispatcher.py:407-419 sandbox_map). Queen 仍需自把 forbidden (worker 不自由发挥)。
    - 越界默认 worker 丢弃改动并报告, 不静默执行.
-5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话. **派单确认纪律 (v29.8)**: 每次派 delegate_task 立刻报 (a) 派单 ID (b) live transcript 路径 (c) idle 状态. 不说"等结果"就算了.
+5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话. **派单确认纪律 (v29.8)**: 每次派 delegate_task 立刻报 (a) 派单 ID (b) live transcript 路径 (c) idle 状态. 不说"等结果"就算了. **派单 prose 纪律 (v29.8 #11)**: worker 返回 → 下一轮必须直接调工具 (delegate_task / patch / terminal / write_file), **禁止先写 ≥3 段 prose 再调工具**. 思考里的 "要派" 必须 1:1 映射到输出里的 tool call. 派单前 prose ≤2 行, 派单后 prose ≤1 行 (派单 ID + idle). 详见 audit-v29.8-thinking-execution-desync.md.
 6. **结果红了** → Queen 再派一轮 (同引擎或换引擎), ≤2 轮; 还红再报用户. 详见 "轮" 定义与速查表.
 
 **派单 final-report 长度约束**（防止 worker 单次输出撞 token 上限 timeout）:
@@ -225,6 +225,7 @@ Worker：短生命周期 task 默认 10min / 硬上限 60min / 3600s 留给人�
 | 8 | P0 | **思考与执行脱节**: 5 轮思考里说"要派"但输出没调 delegate_task, 用户催 5 次"派了吗/为什么还不派" | 2026-08-08 会话 (Henry 连续催 5 次) | SOUL §决策树 L30 加"用户明确要求派单 → 强制派单"例外 + §checklist 加强制派单覆盖规则 (v29.8) |
 | 9 | P1 | **mihomo proxy SSL_ERROR_SYSCALL 不一致**: 同一会话内 hermes-fleet 推 push 成功, hermes-wiki 直连 SSL_ERROR_SYSCALL; 需 unset 8 个 proxy env vars + `-c http.proxy="" -c https.proxy=""` 才能推. **fix evolved: 2-tier fallback** — Tier 1 (unset) 失败且 stderr 含 `SSL_ERROR_SYSCALL\|github.*443.*timeout\|connection.*reset` 时自动 Tier 2 (`-c http.proxy=http://127.0.0.1:7897` + per-URL `-c http.https://github.com.proxy=...`) | 2026-08-08 commit f02871a push 220cb2d (Tier 1); 2026-08-08 hand-verify Tier 2 for hermes-wiki; auto_run.py 返回 `tier_used`/`retried` 字段 | auto_run.py 加 `cmd_git_push(repo_dir, remote, branch)` subcommand: 自动 unset env + git -c http.proxy=; 调用方只需 `auto_run.py git-push --repo-dir ~/hermes-wiki`. 后续 Queen + auto_run 推 hermes-wiki/hermes-fleet 都用这个 helper |
 | 10 | P0 | **delegate_task max_iterations 截断 (opencode 调研)**: 2 次确认 (deleg_4118f2ab 9 api calls, deleg_9b15e029, deleg_d1f5d49a 13 api calls), 调研类任务默认 50 turns 不够, 文件未落地 | 2026-08-08 worker-coverage audit, opencode-truncation-fix audit | (a) hermes-fleet SKILL.md queen-dispatch §不要 加 max_iterations 警示; (b) 派 audit/调研时 goal 显式 "≤6 tool calls 写完即收"; (c) data 给全避免 worker 自己 search 多次; (d) 长期: hermes-agent 工具签名加 max_iterations 参数 (需 upstream patch) |
+| 11 | P0 | **思考/执行脱节 + 派单前 prose 洪水**: 5+ 次 "派了吗/为什么还不派" 后才调 delegate_task; worker 返回后又写 3-4 段 prose 才派下一单; 思考里"要派"≠输出里 tool call | 2026-08-08 全天会话 (audit-v29.8-thinking-execution-desync.md 完整记录 6 次实例) | SOUL §决策树 L41 加"派单 prose 纪律": worker 返回 → 下一轮直接调工具, 派单前 ≤2 行 prose, 派单后 ≤1 行. 思考↔tool call 1:1. |
 
 ## 汇报阈值
 
