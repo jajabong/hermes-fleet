@@ -254,6 +254,47 @@ def cmd_memory_save(label: str, content: str) -> dict:
         return {"task": "memory-save", "label": label, "exit": 1, "error": repr(e)}
 
 
+def cmd_git_push(repo_dir: str, remote: str = "origin", branch: str = "main") -> dict:
+    """v29.8 git-push helper: bypass mihomo proxy for github.com SSL_ERROR_SYSCALL.
+
+    Root cause (Queen 架构问题 P1 #9): mihomo (127.0.0.1:7897) caches TLS sessions
+    for some GitHub repos but not others. Without proxy, hermes-wiki push hit
+    SSL_ERROR_SYSCALL on first attempt. Fix: unset all 6 proxy env vars AND pass
+    `-c http.proxy=""` to override ~/.gitconfig [http] proxy. Pushed successfully
+    after this combination. See commit f02871a session log 2026-08-08.
+
+    Usage: auto_run.py git-push --repo-dir ~/hermes-wiki
+    """
+    env = os.environ.copy()
+    for k in ("http_proxy", "https_proxy", "all_proxy",
+              "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+              "no_proxy", "NO_PROXY"):
+        env.pop(k, None)
+    try:
+        proc = subprocess.run(
+            ["git", "-c", "http.proxy=", "-c", "https.proxy=",
+             "push", remote, branch],
+            cwd=repo_dir,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return {
+            "task": "git-push",
+            "repo_dir": repo_dir,
+            "remote": remote,
+            "branch": branch,
+            "exit": proc.returncode,
+            "stdout": proc.stdout[-500:] if proc.stdout else "",
+            "stderr": proc.stderr[-500:] if proc.stderr else "",
+        }
+    except subprocess.TimeoutExpired:
+        return {"task": "git-push", "repo_dir": repo_dir, "exit": 124, "error": "timeout"}
+    except Exception as e:
+        return {"task": "git-push", "repo_dir": repo_dir, "exit": 1, "error": repr(e)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="auto_run",
@@ -304,6 +345,12 @@ def main() -> int:
     p_mem.add_argument("--label", required=True)
     p_mem.add_argument("--content", required=True)
 
+    # v29.8 git-push helper: bypass mihomo proxy for github.com SSL_ERROR_SYSCALL
+    p_push = sub.add_parser("git-push", help="git push with proxy unset (mihomo workaround)")
+    p_push.add_argument("--repo-dir", required=True, help="git repo path")
+    p_push.add_argument("--remote", default="origin")
+    p_push.add_argument("--branch", default="main")
+
     args = parser.parse_args()
     cmd = args.cmd
 
@@ -330,6 +377,8 @@ def main() -> int:
         result = cmd_kanban_update_status(args.task_id, args.status)
     elif cmd == "memory-save":
         result = cmd_memory_save(args.label, args.content)
+    elif cmd == "git-push":
+        result = cmd_git_push(args.repo_dir, args.remote, args.branch)
     else:
         parser.error(f"unknown command: {cmd}")
 

@@ -223,6 +223,7 @@ Worker：短生命周期 task 默认 10min / 硬上限 60min / 3600s 留给人�
 | # | 严重度 | 问题 | 证据 | 修法 |
 |---|---|---|---|---|
 | 8 | P0 | **思考与执行脱节**: 5 轮思考里说"要派"但输出没调 delegate_task, 用户催 5 次"派了吗/为什么还不派" | 2026-08-08 会话 (Henry 连续催 5 次) | SOUL §决策树 L30 加"用户明确要求派单 → 强制派单"例外 + §checklist 加强制派单覆盖规则 (v29.8) |
+| 9 | P1 | **mihomo proxy SSL_ERROR_SYSCALL 不一致**: 同一会话内 hermes-fleet 推 push 成功, hermes-wiki 直连 SSL_ERROR_SYSCALL; 需 unset 8 个 proxy env vars + `-c http.proxy="" -c https.proxy=""` 才能推 | 2026-08-08 commit f02871a push 220cb2d | auto_run.py 加 `cmd_git_push(repo_dir, remote, branch)` subcommand: 自动 unset env + git -c http.proxy=; 调用方只需 `auto_run.py git-push --repo-dir ~/hermes-wiki`. 后续 Queen + auto_run 推 hermes-wiki/hermes-fleet 都用这个 helper |
 
 ## 汇报阈值
 
