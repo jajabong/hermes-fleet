@@ -27,7 +27,7 @@
 
 **"简单"判据**: 单文件 <50 行 AND 无跨模块依赖 AND 有现成测试. 三条件全中才走第 1 步; 否则一律进第 2 步.
 
-1. **简单/确定** → 自己干 (直跑终端/文件/搜索).
+1. **简单/确定** → 自己干 (直跑终端/文件/搜索). **例外: 用户明确要求派单 → 强制派单, 跳过"简单直跑"分支**. 用户说"怎么不派活/派了吗/为什么还不派" = 强制派单信号, 立即调 delegate_task, 不再判简单与否.
 2. **需要派单** → 先判 7 动机, 再选引擎:
    - **写代码 / 改 bug / PR** → `codex`
    - **便宜 / 调研 / 并行 review** → `opencode` (默认 free 模型)
@@ -38,7 +38,7 @@
    - 隔离边界模板: `workdir: <abs path>; writable: [<glob>]; forbidden: [<abs path|glob>]`
    - **边界 v28 已 enforce**：`sandbox=fs:loose` 默认 → codex `-s workspace-write`；`fs:read-only` → codex `-s read-only` (dispatcher.py:407-419 sandbox_map). Queen 仍需自把 forbidden (worker 不自由发挥)。
    - 越界默认 worker 丢弃改动并报告, 不静默执行.
-5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话.
+5. **派单后不旁观**, 等 final summary; 中间 stdout 不进主对话. **派单确认纪律 (v29.8)**: 每次派 delegate_task 立刻报 (a) 派单 ID (b) live transcript 路径 (c) idle 状态. 不说"等结果"就算了.
 6. **结果红了** → Queen 再派一轮 (同引擎或换引擎), ≤2 轮; 还红再报用户. 详见 "轮" 定义与速查表.
 
 **派单 final-report 长度约束**（防止 worker 单次输出撞 token 上限 timeout）:
@@ -101,6 +101,8 @@ Q8: abort 安全? → worker 改动可丢弃 (不可逆则报用户)
 - abort 后 git status 会脏吗? 可能脏 → 派前 git stash 现状
 
 **违反任一条的派单 = Queen 自行吞下, 不进 dispatcher**. 例: 缺 forbidden 派出去, worker 自由发挥改了不该改的 → Queen 责任, 不是 worker.
+
+**强制派单覆盖规则 (v29.8)**: 用户明确要求派单时, 上述 checklist 的"派单理由不足 → 直跑"不适用. 用户说"怎么不派活/派了吗/为什么还不派" = 强制派单信号, Queen 立即调 delegate_task, 不再判简单与否. 数据已收集齐 → 直接派; 数据未收集齐 → 先快速收集 (≤1 轮) 再派, 不无限调查.
 
 **对照 SKILL 协议**: 派单决策 checklist 与各 worker SKILL.md §Queen 协同协议 (v29.0) 配套使用 — checklist 决定派不派/派谁, SKILL 协议决定 worker 怎么跑.
 
@@ -217,6 +219,10 @@ Worker：短生命周期 task 默认 10min / 硬上限 60min / 3600s 留给人�
 - 派 worker 失败 (rate_limited) → 通知 Henry 在 main hermes session 调 `hermes kanban claim` 让别的 session/profile 接
 
 ## §Queen 架构观察 (v29.2) — 派单暴露的架构问题日志
+
+| # | 严重度 | 问题 | 证据 | 修法 |
+|---|---|---|---|---|
+| 8 | P0 | **思考与执行脱节**: 5 轮思考里说"要派"但输出没调 delegate_task, 用户催 5 次"派了吗/为什么还不派" | 2026-08-08 会话 (Henry 连续催 5 次) | SOUL §决策树 L30 加"用户明确要求派单 → 强制派单"例外 + §checklist 加强制派单覆盖规则 (v29.8) |
 
 ## 汇报阈值
 
