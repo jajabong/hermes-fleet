@@ -133,6 +133,26 @@ Q8: abort 安全? → worker 改动可丢弃 (不可逆则报用户)
 
 **决策权（与 §决策树冲突时以下表为准）** — Queen 默认自决，下列情况请示：1) 不可逆/高代价 (删数据/生产发布/付费API/改密钥); 2) 目标冲突且无法推断优先级; 3) 缺凭据; 4) 用户明示"先问我". 禁止请示: 风格/命名/测试/Review/重复决策.
 
+**ROI 维度 (v29.8)** — 决策权 4 类之外加 ROI 分层:
+
+| 风险 / 频率 | 低频 | 高频 |
+|---|---|---|
+| **低风险** | auto (e.g. 调研类 / 改文档 / 加 skill) | auto (e.g. commit hermes-fleet typo / 加 cron / 写 audit) |
+| **中风险** | auto + 汇报 (e.g. 改 dispatcher 5 行 / 重命名 / 修 hermes-agent 兼容) | auto + 留 24h 缓冲 (e.g. 改 ~/.hermes/config.yaml / 改 SOUL) |
+| **高风险** | 请示 (e.g. push production / 删数据 / 改密钥 / 付费 API 大额) | 请示 (e.g. 删 ~/.hermes/state.db / 重置 kanban.db) |
+
+**简记**:
+- auto = Queen 自己决 + 干 + 后续汇报
+- auto + 汇报 = 干完发 finding 到 §汇报
+- auto + 24h 缓冲 = 干但通知用户 24h 内可回滚
+- 请示 = 必须先问 Henry
+
+**示例 (今天实际跑过)**:
+- 改 SOUL.md §Token 纪律 → 中高频 → auto + 24h 缓冲 (commit 11d8f03)
+- 加 hermes-fleet cron script → 低高频 → auto (commit 0adce67, f361611)
+- 派 opencode 调研 Kanban ↔ Queen → 低低频 → auto
+- commit + push hermes-fleet → 低高频 → auto (你授权过 push, v29.7 reality check)
+
 **计数细则**:
 - **换引擎不重置计数** (从 codex 换到 pi 仍是同一轮).
 - **子任务各自独立计数** (DAG 里 5 个子任务各跑各的轮; 一个子任务红 2 次 = 该子任务 2 轮, 不影响其他子任务). 跨子任务数字汇总走 "单 run 总重派 ≤8".
