@@ -190,6 +190,70 @@ def cmd_kanban_complete(task_id: str, summary: str) -> dict:
             "stdout": result["stdout"][:200]}
 
 
+def cmd_search_files(pattern: str, path: str = ".", file_glob: str | None = None,
+                     limit: int = 50, output_mode: str = "files_only") -> dict:
+    """hermes skill-equivalent search_files. Wraps ripgrep via subprocess."""
+    args = ["rg", "--no-heading", "--line-number"]
+    if output_mode == "files_only":
+        args.append("--files-with-matches")
+    if file_glob:
+        args.extend(["--glob", file_glob])
+    if limit:
+        args.extend(["--max-count", str(limit)])
+    args.extend(["--", pattern, path])
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        matches = proc.stdout.strip().split("\n") if proc.stdout.strip() else []
+        return {"task": "search-files", "pattern": pattern, "path": path,
+                "exit": proc.returncode, "match_count": len(matches),
+                "matches": matches[:limit]}
+    except subprocess.TimeoutExpired:
+        return {"task": "search-files", "pattern": pattern, "exit": 124, "error": "timeout"}
+    except FileNotFoundError:
+        return {"task": "search-files", "pattern": pattern, "exit": 127, "error": "rg not found"}
+    except Exception as e:
+        return {"task": "search-files", "pattern": pattern, "exit": 1, "error": repr(e)}
+
+
+def cmd_read_file(path: str, offset: int = 1, limit: int = 500) -> dict:
+    """hermes skill-equivalent read_file. Pure file read, paginated."""
+    try:
+        with open(path) as f:
+            lines = f.readlines()
+        total = len(lines)
+        start = max(1, offset)
+        end = min(total, start + limit - 1)
+        content = "".join(lines[start - 1:end])
+        return {"task": "read-file", "path": path, "offset": start, "limit": limit,
+                "total_lines": total, "exit": 0, "content": content}
+    except FileNotFoundError:
+        return {"task": "read-file", "path": path, "exit": 1, "error": "file not found"}
+    except Exception as e:
+        return {"task": "read-file", "path": path, "exit": 1, "error": repr(e)}
+
+
+def cmd_kanban_update_status(task_id: str, status: str) -> dict:
+    """hermes kanban edit <id> --result <status> wrapper (edit has no --status flag)."""
+    result = _run_hermes(["kanban", "edit", task_id, "--result", status], timeout=15)
+    return {"task": "kanban-update-status", "task_id": task_id, "status": status,
+            "exit": result["exit"], "stdout": result["stdout"][:200]}
+
+
+def cmd_memory_save(label: str, content: str) -> dict:
+    """Built-in memory is MEMORY.md/USER.md; no CLI save. Write to ~/.hermes/memories/ instead."""
+    import os
+    mem_dir = os.path.expanduser("~/.hermes/memories")
+    os.makedirs(mem_dir, exist_ok=True)
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", label)
+    path = os.path.join(mem_dir, f"{safe}.md")
+    try:
+        with open(path, "a") as f:
+            f.write(f"## {label}\n{content}\n\n")
+        return {"task": "memory-save", "label": label, "exit": 0, "path": path}
+    except Exception as e:
+        return {"task": "memory-save", "label": label, "exit": 1, "error": repr(e)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="auto_run",
@@ -219,6 +283,27 @@ def main() -> int:
     p_complete.add_argument("--task-id", required=True)
     p_complete.add_argument("--summary", required=True)
 
+    p_search = sub.add_parser("search-files", help="search files (rg wrapper)")
+    p_search.add_argument("--pattern", required=True)
+    p_search.add_argument("--path", default=".")
+    p_search.add_argument("--file-glob", default=None)
+    p_search.add_argument("--limit", type=int, default=50)
+    p_search.add_argument("--output-mode", default="files_only",
+                          choices=["files_only", "content"])
+
+    p_read = sub.add_parser("read-file", help="read file (paginated)")
+    p_read.add_argument("--path", required=True)
+    p_read.add_argument("--offset", type=int, default=1)
+    p_read.add_argument("--limit", type=int, default=500)
+
+    p_update = sub.add_parser("kanban-update-status", help="update Kanban task status")
+    p_update.add_argument("--task-id", required=True)
+    p_update.add_argument("--status", required=True)
+
+    p_mem = sub.add_parser("memory-save", help="save memory entry")
+    p_mem.add_argument("--label", required=True)
+    p_mem.add_argument("--content", required=True)
+
     args = parser.parse_args()
     cmd = args.cmd
 
@@ -236,6 +321,15 @@ def main() -> int:
         result = cmd_kanban_show(args.task_id)
     elif cmd == "kanban-complete":
         result = cmd_kanban_complete(args.task_id, args.summary)
+    elif cmd == "search-files":
+        result = cmd_search_files(args.pattern, args.path, args.file_glob,
+                                  args.limit, args.output_mode)
+    elif cmd == "read-file":
+        result = cmd_read_file(args.path, args.offset, args.limit)
+    elif cmd == "kanban-update-status":
+        result = cmd_kanban_update_status(args.task_id, args.status)
+    elif cmd == "memory-save":
+        result = cmd_memory_save(args.label, args.content)
     else:
         parser.error(f"unknown command: {cmd}")
 
