@@ -254,16 +254,53 @@ def cmd_memory_save(label: str, content: str) -> dict:
         return {"task": "memory-save", "label": label, "exit": 1, "error": repr(e)}
 
 
+# v29.8 git-push 2-tier fallback retry pattern.
+# Tier 1 (unset proxy) fails with any of these stderr signals → try Tier 2 (force proxy).
+_PUSH_RETRY_PATTERN = re.compile(
+    r"SSL_ERROR_SYSCALL|github.*443.*timeout|connection.*reset",
+    re.IGNORECASE,
+)
+
+
+def _try_push(repo_dir: str, env: dict, proxy_args: list[str],
+              remote: str, branch: str, timeout: int = 120) -> dict:
+    """Single git push attempt. Returns dict with exit/stdout/stderr."""
+    cmd = ["git"] + proxy_args + ["push", remote, branch]
+    proc = subprocess.run(
+        cmd,
+        cwd=repo_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return {
+        "exit": proc.returncode,
+        "stdout": proc.stdout[-500:] if proc.stdout else "",
+        "stderr": proc.stderr[-500:] if proc.stderr else "",
+        "cmd": " ".join(cmd),
+    }
+
+
 def cmd_git_push(repo_dir: str, remote: str = "origin", branch: str = "main") -> dict:
-    """v29.8 git-push helper: bypass mihomo proxy for github.com SSL_ERROR_SYSCALL.
+    """v29.8 git-push helper (2-tier fallback): bypass mihomo proxy for SSL_ERROR_SYSCALL.
 
     Root cause (Queen 架构问题 P1 #9): mihomo (127.0.0.1:7897) caches TLS sessions
-    for some GitHub repos but not others. Without proxy, hermes-wiki push hit
-    SSL_ERROR_SYSCALL on first attempt. Fix: unset all 6 proxy env vars AND pass
-    `-c http.proxy=""` to override ~/.gitconfig [http] proxy. Pushed successfully
-    after this combination. See commit f02871a session log 2026-08-08.
+    for some GitHub repos but not others. Behavior is non-deterministic across repos:
+      - hermes-fleet: Tier 1 (unset proxy + -c http.proxy="") succeeds.
+      - hermes-wiki:   Tier 1 fails with SSL_ERROR_SYSCALL on first attempt.
+    Fix: 2-tier fallback.
+      Tier 1: unset all 8 proxy env vars + git -c http.proxy= -c https.proxy=
+              (override ~/.gitconfig [http] proxy).
+      Tier 2: if Tier 1 exits non-zero AND stderr matches
+              "SSL_ERROR_SYSCALL|github.*443.*timeout|connection.*reset",
+              retry with -c http.proxy=http://127.0.0.1:7897 + per-URL override
+              -c http.https://github.com.proxy=http://127.0.0.1:7897.
+              (mihomo proxy must be active — verified manually 2026-08-08.)
+    See commit f02871a (Tier 1) and session log 2026-08-08 (Tier 2 evolved).
 
     Usage: auto_run.py git-push --repo-dir ~/hermes-wiki
+    Return: includes tier_used (1|2) and retried (bool) fields.
     """
     env = os.environ.copy()
     for k in ("http_proxy", "https_proxy", "all_proxy",
@@ -278,28 +315,59 @@ def cmd_git_push(repo_dir: str, remote: str = "origin", branch: str = "main") ->
         return {"task": "git-push", "repo_dir": repo_dir, "exit": 1,
                 "error": f"not a git repo: {repo_dir}"}
     try:
-        proc = subprocess.run(
-            ["git", "-c", "http.proxy=", "-c", "https.proxy=",
-             "push", remote, branch],
-            cwd=repo_dir,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        # Tier 1: unset proxy + git -c http.proxy=
+        tier1_args = ["-c", "http.proxy=", "-c", "https.proxy="]
+        first = _try_push(repo_dir, env, tier1_args, remote, branch)
+        if first["exit"] == 0:
+            return {
+                "task": "git-push",
+                "repo_dir": repo_dir,
+                "remote": remote,
+                "branch": branch,
+                "exit": 0,
+                "tier_used": 1,
+                "retried": False,
+                "stdout": first["stdout"],
+                "stderr": first["stderr"],
+            }
+        # Check if stderr matches retry pattern → Tier 2
+        if _PUSH_RETRY_PATTERN.search(first["stderr"] or ""):
+            # Tier 2: force mihomo proxy on http + per-URL for github.com
+            tier2_args = [
+                "-c", "http.proxy=http://127.0.0.1:7897",
+                "-c", "http.https://github.com.proxy=http://127.0.0.1:7897",
+            ]
+            second = _try_push(repo_dir, env, tier2_args, remote, branch)
+            return {
+                "task": "git-push",
+                "repo_dir": repo_dir,
+                "remote": remote,
+                "branch": branch,
+                "exit": second["exit"],
+                "tier_used": 2 if second["exit"] == 0 else None,
+                "retried": True,
+                "tier1_stderr": first["stderr"],
+                "stdout": second["stdout"],
+                "stderr": second["stderr"],
+            }
+        # Tier 1 failed for non-network reason — don't retry, surface as-is.
         return {
             "task": "git-push",
             "repo_dir": repo_dir,
             "remote": remote,
             "branch": branch,
-            "exit": proc.returncode,
-            "stdout": proc.stdout[-500:] if proc.stdout else "",
-            "stderr": proc.stderr[-500:] if proc.stderr else "",
+            "exit": first["exit"],
+            "tier_used": 1,
+            "retried": False,
+            "stdout": first["stdout"],
+            "stderr": first["stderr"],
         }
     except subprocess.TimeoutExpired:
-        return {"task": "git-push", "repo_dir": repo_dir, "exit": 124, "error": "timeout"}
+        return {"task": "git-push", "repo_dir": repo_dir, "exit": 124,
+                "error": "timeout"}
     except Exception as e:
-        return {"task": "git-push", "repo_dir": repo_dir, "exit": 1, "error": repr(e)}
+        return {"task": "git-push", "repo_dir": repo_dir, "exit": 1,
+                "error": repr(e)}
 
 
 def main() -> int:
