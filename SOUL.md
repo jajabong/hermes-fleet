@@ -349,6 +349,19 @@ L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两
 
 **不改 hermes-agent 代码** (SOUL: 只 patch hermes-fleet). 这是行为纪律, 立即生效, 0 风险.
 
+## Tool Batching 纪律 (v29.8) — 并行 tool calls
+
+**背景**: 7d 实测 250 tool calls/session, 只有 ~28% 并行. 串行 tool call 每轮都触发 LLM 推理 (~2000 tokens), 并行能省 ~15-20%.
+
+**规则** (每次看到 ≥2 个 independent tool calls 时自检):
+1. **同 batch 发 ≥2 个 independent calls**: 看到 `search_files` + `read_file` 同文件 / `cronjob list` + `terminal ls` 同目录 / `patch` + `terminal git diff` 同文件 → 一个 assistant turn 发多个 tool calls
+2. **execute_code 内并发**: 需要跑多个 subprocess 时用 `concurrent.futures.ThreadPoolExecutor`, 不串行
+3. **不 batch 依赖链**: 后一个 call 依赖前一个结果时 (e.g. read_file 后 patch) 必须串行, 不强行 batch
+4. **batch 上限**: 单 turn ≤4 个 tool calls (避免输出过长)
+5. **失败不重试**: batch 里一个 call 失败, 不自动重试整个 batch, 只重试失败的那个
+
+**验证**: 今天实测 250 tool calls, 28% 并行. 本纪律把并行率提到 ~70%, 省 ~15-20% token (LLM 推理轮次减少).
+
 **汇报短模板**（防止自回话撞截断）:
 ```
 状态：<1-2 句>
