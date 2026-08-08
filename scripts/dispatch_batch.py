@@ -74,6 +74,41 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
     raise ValueError(f"unknown engine: {engine}")
 
 
+def _kanban_claim(task_id: str, ttl: int = 600) -> None:
+    """Best-effort Kanban claim (v29.8). Silent on failure.
+
+    Uses 'hermes kanban claim <id> --ttl <ttl>'. If the binary is missing,
+    the network is down, or the task_id was never created, we just log to
+    stderr and move on — Kanban is observability, not a hard dependency.
+    """
+    try:
+        subprocess.run(
+            ["hermes", "kanban", "claim", task_id, "--ttl", str(ttl)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as e:
+        sys.stderr.write(f"kanban claim {task_id} failed: {e!r}\n")
+
+
+def _kanban_complete(task_id: str, summary: str) -> None:
+    """Best-effort Kanban complete (v29.8). Silent on failure.
+
+    Uses 'hermes kanban complete <id> --summary <text>'. See _kanban_claim
+    for failure semantics — Kanban is observability, not a hard dependency.
+    """
+    try:
+        subprocess.run(
+            ["hermes", "kanban", "complete", task_id, "--summary", summary[:500]],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as e:
+        sys.stderr.write(f"kanban complete {task_id} failed: {e!r}\n")
+
+
 def _run(task: dict) -> dict:
     engine = task["engine"]
     # v29.6: codex needs NO_PROXY=127.0.0.1,localhost to bypass macOS mihomo/Clash
@@ -92,6 +127,11 @@ def _run(task: dict) -> dict:
     workdir = task.get("workdir", ".")
     prompt = f"{goal}\n\n{ctx}" if ctx and goal else goal
     cmd = _build_cmd(engine, prompt, task)
+    # v29.8 Phase 1: auto Kanban claim (if task has kanban_task_id or 'id').
+    # Kanban is observability, not a hard dependency — failures are silent.
+    kanban_task_id = task.get("kanban_task_id") or task.get("id")
+    if kanban_task_id:
+        _kanban_claim(str(kanban_task_id))
     try:
         proc = subprocess.run(
             cmd,
@@ -101,14 +141,21 @@ def _run(task: dict) -> dict:
             cwd=workdir,
             env=env,
         )
-        return {
+        result = {
             "id": task.get("id"),
             "engine": engine,
             "exit": proc.returncode,
             "stdout_tail": proc.stdout[-STDOUT_TAIL:],
             "stderr_tail": proc.stderr[-STDERR_TAIL:],
         }
+        # v29.8 Phase 1: auto Kanban complete (best-effort, silent on failure).
+        if kanban_task_id:
+            summary = f"engine={engine} exit={proc.returncode}"
+            _kanban_complete(str(kanban_task_id), summary)
+        return result
     except subprocess.TimeoutExpired:
+        if kanban_task_id:
+            _kanban_complete(str(kanban_task_id), f"engine={engine} exit=124 timeout")
         return {
             "id": task.get("id"),
             "engine": engine,
@@ -117,6 +164,8 @@ def _run(task: dict) -> dict:
             "timeout_seconds": TIMEOUT_S,
         }
     except Exception as e:
+        if kanban_task_id:
+            _kanban_complete(str(kanban_task_id), f"engine={engine} exit=1 {e!r}")
         return {
             "id": task.get("id"),
             "engine": engine,
