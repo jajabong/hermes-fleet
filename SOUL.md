@@ -314,6 +314,21 @@ L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两
 - 回复简洁, 引用用 `path:line`
 - 没要求时只给结论 + 验证证据, 不 prose 解释
 
+## Token 纪律 (v29.8) — execute_code 输出控制
+
+**背景**: 7d 实测 247M tokens, 单 session 168M. execute_code 输出是最大放大器 (518 次, ~30% token).
+
+**规则** (每次 execute_code 调用前自检):
+1. **输出 > 2KB 时写文件**: 长输出 (JSON dump / 文件内容 / 日志) 写到 `/tmp/exec-out-{hash}.txt`, 只 print 路径 + 末尾 200 字符
+2. **不 print 大 JSON**: 用 `print(json.dumps(x)[:200])` 或 `print(f"count={len(x)}")` 代替全量
+3. **用 print() 控制**: 不 print 5000+ tokens 的 stdout
+4. **优先 search_files / read_file**: 需要看文件内容时用 read_file (分页), 不用 execute_code cat
+5. **长 bash 落文件**: >30 行 bash 写 .sh 文件再执行, 不 inline heredoc
+
+**验证**: hermes-agent 已有 MAX_STDOUT_BYTES=50KB 截断 (code_execution_tool.py L77), 但 50KB ≈ 12.5k tokens 仍太大. 本纪律把单次输出压到 <2KB, 省 ~30% token.
+
+**不改 hermes-agent 代码** (SOUL: 只 patch hermes-fleet). 这是行为纪律, 立即生效, 0 风险.
+
 **汇报短模板**（防止自回话撞截断）:
 ```
 状态：<1-2 句>
