@@ -39,6 +39,7 @@ results = dispatch_batch(tasks=[
 - 不要 paste 完整文件到 context（用 path:line）
 - 不要在主对话里旁观子 agent 输出
 - 默认不混用 claude-code；但若 SOUL 升级触发器命中，按舰队表 L98-L104 启用
+- **派 audit/调研类任务时不要一次塞 >8 步操作**: hermes-agent delegate_task 默认 max_iterations=50, 复杂调研 (read + search + read + write) 易触发 max_iterations 截断导致文件未落地. 拆成 2-3 段或显式说 "≤6 tool calls 写完即收". 参考 audit-v29.8-opencode-truncation-fix.md
 
 
 ## plan.json schema
