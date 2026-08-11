@@ -45,7 +45,7 @@
 - 每条 finding ≤2 句、≤80 中文字
 - evidence 只用 `path:line` 引用, 不 paste 验证内容
 - 长 evidence 写到 artifact 让 Queen 事后自读, 不进 worker final summary
-- 若预计 evidence >2KB, 分两步派: 先证据收集, 再结构化报告
+- 若预计 evidence >8KB, 分两步派: 先证据收集, 再结构化报告
 
 ## 打断处理（用户插话时）
 
@@ -151,6 +151,7 @@ Q8: abort 安全? → worker 改动可丢弃 (不可逆则报用户)
 
 **示例 (今天实际跑过)**:
 - 改 SOUL.md §Token 纪律 → 中高频 → auto + 24h 缓冲 (commit 11d8f03)
+- 改 SOUL.md §Token 纪律 v29.8.2 阈值 2KB→8KB → 中高频 → auto + 24h 缓冲 (uncommitted 2026-08-11)
 - 加 hermes-fleet cron script → 低高频 → auto (commit 0adce67, f361611)
 - 派 opencode 调研 Kanban ↔ Queen → 低低频 → auto
 - commit + push hermes-fleet → 低高频 → auto (你授权过 push, v29.7 reality check)
@@ -341,22 +342,24 @@ L1 失败 → 回 codex 修, 不进 L2. L2 发现问题 → 回 codex, 最多两
 
 ## Token 纪律 (v29.8) — execute_code 输出控制
 
-**背景**: 7d 实测 247M tokens, 单 session 168M. execute_code 输出是最大放大器 (518 次, ~30% token).
+**背景**: 7d 实测 591M tokens, 单 session 228M (Aug 07). execute_code 是最大放大器之一 (796 calls / 15.8%). 旧数据 247M/518 次 (2026-08-08) 过期.
 
 **规则** (每次 execute_code 调用前自检):
-1. **输出 > 2KB 时写文件**: 长输出 (JSON dump / 文件内容 / 日志) 写到 `/tmp/exec-out-{hash}.txt`, 只 print 路径 + 末尾 200 字符
+1. **输出 > 8KB 时写文件**: 长输出 (JSON dump / 文件内容 / 日志) 写到 `/tmp/exec-out-{hash}.txt`, 只 print 路径 + 末尾 200 字符
 2. **不 print 大 JSON**: 用 `print(json.dumps(x)[:200])` 或 `print(f"count={len(x)}")` 代替全量
 3. **用 print() 控制**: 不 print 5000+ tokens 的 stdout
 4. **优先 search_files / read_file**: 需要看文件内容时用 read_file (分页), 不用 execute_code cat
 5. **长 bash 落文件**: >30 行 bash 写 .sh 文件再执行, 不 inline heredoc
 
-**验证**: hermes-agent 已有 MAX_STDOUT_BYTES=50KB 截断 (code_execution_tool.py L77), 但 50KB ≈ 12.5k tokens 仍太大. 本纪律把单次输出压到 <2KB, 省 ~30% token.
+**验证**: hermes-agent 已有 MAX_STDOUT_BYTES=50KB 截断 (code_execution_tool.py L77, 40/60 head/tail L129–L130), head 20KB ≈ 5k tokens 仍可读. 本纪律把单次输出压到 <8KB (留 buffer 不到 head 20KB 一半), 省 ~30% token.
+
+**v29.8.2 调整 (2026-08-11)**: 2KB → 8KB. 50KB 截断时 head = 40% × 50KB = 20KB, 实际可读窗口 8KB < 20KB 留 2.5× buffer, 既守 50KB 截断前的可读区, 又避免过度落文件.
 
 **不改 hermes-agent 代码** (SOUL: 只 patch hermes-fleet). 这是行为纪律, 立即生效, 0 风险.
 
 ## Tool Batching 纪律 (v29.8) — 并行 tool calls
 
-**背景**: 7d 实测 250 tool calls/session, 只有 ~28% 并行. 串行 tool call 每轮都触发 LLM 推理 (~2000 tokens), 并行能省 ~15-20%.
+**背景**: 7d 实测 3196 tool calls, 并行率未直接量化但偏低. 串行 tool call 每轮都触发 LLM 推理 (~2000 tokens), 并行能省 ~15-20%. 旧数据 250 tool calls/session @ 28% 并行 (2026-08-08) 过期.
 
 **规则** (每次看到 ≥2 个 independent tool calls 时自检):
 1. **同 batch 发 ≥2 个 independent calls**: 看到 `search_files` + `read_file` 同文件 / `cronjob list` + `terminal ls` 同目录 / `patch` + `terminal git diff` 同文件 → 一个 assistant turn 发多个 tool calls

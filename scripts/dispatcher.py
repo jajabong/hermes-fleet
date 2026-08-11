@@ -60,7 +60,7 @@ def now() -> str:
 # same root-cause failure hashes the same across runs (timestamps, pids, and
 # incidental random tokens are noise; the underlying error text is the signal).
 _FP_LINE_PATTERNS = (
-    re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"),
+    re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?\b"),
     re.compile(r"\bpid=\d+\b"),
     re.compile(r"\btid=\d+\b"),
     re.compile(r"\buid=\d+\b"),
@@ -582,13 +582,17 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
 
     # Feature 2: derive a fingerprint from stderr on failure so identical
     # root-cause errors are grouped under one finding key across retries.
-    # Read stderr.log back (it's already flushed+closed by Popen).
+    # Read stderr.log back only on failure (it's already flushed+closed by
+    # Popen). Successful tasks almost always have empty stderr; skipping
+    # the read avoids one disk hit per green task.
     stderr_text = ""
-    try:
-        stderr_text = (task_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        stderr_text = ""
-    fingerprint = finding_fingerprint(task_id, stderr_text) if exit_code != 0 else ""
+    fingerprint = ""
+    if exit_code != 0:
+        try:
+            stderr_text = (task_dir / "stderr.log").read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            stderr_text = ""
+        fingerprint = finding_fingerprint(task_id, stderr_text)
     finding_key = f"{task_id}:{fingerprint}" if fingerprint else ""
 
     result = {
@@ -793,6 +797,32 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
                         tid,
                         prior_started_at=summary.get("started_at"),
                     )
+                    status_map[tid] = {
+                        "id": tid,
+                        "engine": by_id[tid]["engine"],
+                        "role": by_id[tid]["role"],
+                        "mode": by_id[tid]["execution_mode"],
+                        "status": "failed",
+                        "exit": None,
+                        "duration_ms": 0,
+                        "error": "stale running — re-run required",
+                        "summary_path": str(run_dir / "tasks" / tid / "summary.md"),
+                    }
+                    if by_id[tid].get("on_failure") == "block":
+                        queue = deque(children[tid])
+                        while queue:
+                            blocked_id = queue.popleft()
+                            if blocked_id in status_map or blocked_id not in by_id:
+                                continue
+                            remaining_deps[blocked_id] = set()
+                            status_map[blocked_id] = mark_blocked(
+                                by_id[blocked_id],
+                                project_root,
+                                run_dir,
+                                events_path,
+                                reason=f"blocked by failed dependency {tid}",
+                            )
+                            queue.extend(children[blocked_id])
                 elif status == "failed":
                     # conservative: keep failed summary, do not auto-retry
                     status_map[tid] = summary
