@@ -28,7 +28,7 @@ FINDING_FINGERPRINT_VERSION = "1"
 CHECKPOINT_INTERVAL_SECONDS = 3600
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 RISK_LEVELS = {"LOW", "MEDIUM", "HIGH"}
-ENGINES = {"codex", "pi", "opencode", "shell", "claude"}
+ENGINES = {"codex", "pi", "opencode", "shell", "claude", "dsh"}
 ROLES = {"implement", "research", "review", "general", "shell"}
 MODES = {"read_only", "write"}
 ON_FAILURE = {"block", "continue"}
@@ -464,6 +464,18 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
             cmd.extend(["--allowedTools", "Read,Grep,Glob,LS"])
         else:
             cmd.extend(["--add-dir", str(project_root)])
+        cmd.extend(task.get("extra_args", []))
+        return cmd
+    if engine == "dsh":
+        bridge = Path.home() / "hermes-fleet" / "dsh-bridge" / "hermes_dsh_bridge.py"
+        last_message = project_root / output_file if output_file else task_dir / "agent-last-message.txt"
+        cmd = ["/opt/homebrew/bin/python3.14", str(bridge), prompt, "--out", str(last_message)]
+        if task.get("preset"):
+            cmd.extend(["--preset", str(task["preset"])])
+        if task.get("provider"):
+            cmd.extend(["--provider", str(task["provider"])])
+        if task.get("model"):
+            cmd.extend(["--model", str(task["model"])])
         cmd.extend(task.get("extra_args", []))
         return cmd
     raise ValueError(f"unsupported engine: {engine}")
