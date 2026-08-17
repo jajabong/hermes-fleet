@@ -4,7 +4,7 @@
 Designed for cron / CI / direct invocation. LLM Queen does not participate.
 Subcommands:
   insights   --days N [--source X]     hermes insights summary + write to /tmp/auto_run-insights-{ts}.log
-  smoke                                5-engine fleet smoke (shell/codex/pi/opencode/claude) + Kanban claim/complete
+  smoke                                shell + dsh (if available) smoke + Kanban claim/complete
   monitor                              hermes monitoring status summary
   kanban-list    [--status S]          hermes kanban list (default board)
   kanban-create  --title T [--body B]  create Kanban task, return task_id
@@ -107,7 +107,7 @@ def _summarize_monitoring(stdout: str) -> dict:
 
 
 def cmd_smoke() -> dict:
-    """5-engine fleet smoke with Kanban audit trail."""
+    """Simplified fleet smoke (shell + dsh if available) with Kanban audit trail."""
     # Create Kanban task for audit
     kanban = _run_hermes(["kanban", "create", f"auto-smoke-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
                           "--body", "auto_run.py fleet smoke"], timeout=15)
@@ -132,15 +132,15 @@ def cmd_smoke() -> dict:
 
     tasks = [
         {"id": "smoke-shell", "engine": "shell", "argv": ["echo", "V298P2_SHELL_OK"], "kanban_task_id": kanban_id},
-        {"id": "smoke-codex", "engine": "codex", "goal": "Respond with exactly: V298P2_CODEX_OK",
-         "workdir": "/Users/henry/anchor", "kanban_task_id": kanban_id},
-        {"id": "smoke-pi", "engine": "pi", "goal": "Respond with exactly: V298P2_PI_OK",
-         "workdir": "/Users/henry/anchor", "kanban_task_id": kanban_id},
-        {"id": "smoke-opencode", "engine": "opencode", "goal": "Respond with exactly: V298P2_OPENCODE_OK",
-         "model": "kilocode/kilo-auto/free", "kanban_task_id": kanban_id},
-        {"id": "smoke-claude", "engine": "claude", "goal": "Respond with exactly: V298P2_CLAUDE_OK",
-         "kanban_task_id": kanban_id},
     ]
+    try:
+        import deepseek_harness  # noqa: F401
+        tasks.append(
+            {"id": "smoke-dsh", "engine": "dsh", "goal": "Respond with exactly: V298P2_DSH_OK",
+             "kanban_task_id": kanban_id}
+        )
+    except ImportError:
+        pass
     results = mod.dispatch_batch(tasks)
     return {
         "task": "smoke",

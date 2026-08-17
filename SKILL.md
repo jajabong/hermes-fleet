@@ -1,7 +1,7 @@
 ---
 name: queen-dispatch
-description: Queen-mode programmatic dispatch to codex/pi/opencode in one execute_code call.
-tags: [orchestration, queen, dispatch, codex, pi, opencode]
+description: Queen-mode programmatic dispatch to shell/dsh in one execute_code call.
+tags: [orchestration, queen, dispatch, shell, dsh]
 ---
 
 # Queen Dispatch — Programmatic Multi-Agent Orchestration
@@ -12,7 +12,8 @@ final summary，不污染主对话。这是真正的 token 节省机制。
 ## When to use
 - ≥2 个独立任务（互不依赖）
 - 多视角 review（3 reviewers 并行）
-- 重活拆给 codex / pi / opencode，避免自己写大段代码
+- 快速 I/O 拆给 shell，深度单任务拆给 DSH（插件 + 工具链）
+- 复杂/超大/多角色任务走 Queen 原生 subagent（codex/opencode/claude），不走 dispatcher
 
 ## How (canonical pattern)
 
@@ -22,23 +23,21 @@ final summary，不污染主对话。这是真正的 token 节省机制。
 from hermes_skills.queen_dispatch import dispatch_batch
 
 results = dispatch_batch(tasks=[
-    {"id": "impl",  "engine": "codex",    "goal": "...", "context": "...", "workdir": "..."},
-    {"id": "review","engine": "opencode", "goal": "...", "context": "...", "workdir": "..."},
-    {"id": "explore","engine": "pi",     "goal": "...", "context": "..."},
+    {"id": "io",    "engine": "shell", "argv": ["echo", "hello"]},
+    {"id": "analyze","engine": "dsh",  "goal": "Read data.xlsx and summarize"},
 ])
 ```
 
 每条 task 的 context 用 path:line 引用，不要 paste 完整文件内容。
 
-## Engines (与 SOUL.md 舰队一致)
-- codex → `codex exec --skip-git-repo-check -C <workdir> "<goal>+context"`
-- pi → `pi -p --provider anchor --model anchor "<goal>+context"`
-- opencode → `opencode run --format json --dir <workdir> "<goal>+context"`（默认 model=`kilocode/kilo-auto/free`; 备选 `opencode/laguna-s-2.1-free` / `opencode/nemotron-3-ultra-free`; 不传 --auto）
+## Engines (v29.12 dsh-first)
+- shell → `sh -c <argv>`（快速 I/O、文件操作）
+- dsh → DeepSeek Harness tactical runtime（默认深度单任务，带 plugins/tools/memory）
 
 ## 不要
 - 不要 paste 完整文件到 context（用 path:line）
 - 不要在主对话里旁观子 agent 输出
-- 默认不混用 claude-code；但若 SOUL 升级触发器命中，按舰队表 L98-L104 启用
+- 复杂任务不走 dispatcher；由 Queen 原生 subagent 直接派 codex/opencode/claude
 
 
 ## plan.json schema
@@ -56,7 +55,7 @@ results = dispatch_batch(tasks=[
   "tasks": [
     {
       "id": "unique-id",
-      "engine": "codex|pi|opencode|shell",
+      "engine": "shell|dsh",
       "role": "implement|research|review|general|shell",
       "execution_mode": "read_only|write",
       "goal": "goal + acceptance + no-overreach",
@@ -67,7 +66,10 @@ results = dispatch_batch(tasks=[
       "output_file": "relative/path.txt",
       "argv": ["python3", "-V"],
       "verification_command": "pytest -x -q",
-      "rollback_on_fail": false
+      "rollback_on_fail": false,
+      "preset": "code|excel|research|browser|writing",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash"
     }
   ]
 }
@@ -75,18 +77,19 @@ results = dispatch_batch(tasks=[
 
 Notes:
 - `shell` tasks require `argv` (string array). Never use shell=True.
-- `review` and `opencode` are forced to `read_only`.
-- `codex` write uses `-s workspace-write`; danger/bypass flags are rejected.
+- `dsh` tasks honor `preset`/`provider`/`model` routing (defaults: deepseek-official / deepseek-v4-flash).
+- `review` role is forced to `read_only`.
+- Complex / large-context / multi-role tasks should bypass dispatcher and go through Queen native subagent.
 
 ## Risk → team mapping（Queen 决策表）
 
 | 风险 | 实现 | L2 review | L3 review | 备注 |
 |---|---|---|---|---|
-| LOW | codex（write） | opencode（read） | - | 单 reviewer |
-| MEDIUM | codex（write） | opencode（read） | - | 单 reviewer；显式写验收条件 |
-| HIGH | codex（write） | opencode（read） | pi（read） | 验证 L2 finding + 关键不变量 |
+| LOW | dsh（write） | shell（read） | - | 单 reviewer |
+| MEDIUM | dsh（write） | shell（read） | - | 单 reviewer；显式写验收条件 |
+| HIGH | dsh（write） | shell（read） | Queen subagent（read） | 验证 L2 finding + 关键不变量 |
 
-Claude Code 仅在 SOUL.md 升级触发器命中时启用（必升级：上下文>50k / 前一轮 pi 失败；建议升级：链式判断≥3 / 架构权衡 / 失败调试 / 多步博弈）。默认走 pi/Anchor。
+Claude Code / codex / opencode 仅在 SOUL.md 升级触发器命中时启用（必升级：上下文>50k / 前一轮 dsh 失败；建议升级：链式判断≥3 / 架构权衡 / 失败调试 / 多步博弈）。默认走 dsh。
 
 ## Blind review rule（防止同源偏见）
 

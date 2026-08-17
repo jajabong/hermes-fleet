@@ -28,7 +28,7 @@ FINDING_FINGERPRINT_VERSION = "1"
 CHECKPOINT_INTERVAL_SECONDS = 3600
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 RISK_LEVELS = {"LOW", "MEDIUM", "HIGH"}
-ENGINES = {"shell", "dsh"}
+ENGINES = {"shell", "dsh", "auto"}
 ROLES = {"implement", "research", "review", "general", "shell"}
 MODES = {"read_only", "write"}
 ON_FAILURE = {"block", "continue"}
@@ -254,7 +254,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
             engine = raw.get("engine")
             role = raw.get("role")
             mode = raw.get("execution_mode")
-            if engine not in ENGINES:
+            if engine not in (ENGINES | {None}):
                 errors.append(f"task {tid}: engine must be one of {sorted(ENGINES)}")
             if role not in ROLES:
                 errors.append(f"task {tid}: role must be one of {sorted(ROLES)}")
@@ -264,6 +264,12 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
             requested_mode = mode
             if role == "review":
                 mode = "read_only"
+
+            # Auto-route: engine="auto" or missing → pick shell if argv is present,
+            # otherwise default to dsh (deep tactical runtime with plugins/tools).
+            resolved_engine = engine
+            if not resolved_engine or resolved_engine == "auto":
+                resolved_engine = "shell" if raw.get("argv") else "dsh"
 
             deps = raw.get("depends_on", [])
             if not isinstance(deps, list) or not all(isinstance(x, str) for x in deps):
@@ -308,7 +314,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
 
             normalized_tasks.append({
                 "id": tid,
-                "engine": engine,
+                "engine": resolved_engine,
                 "role": role,
                 "execution_mode": mode,
                 "requested_execution_mode": requested_mode,
@@ -400,7 +406,8 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
     if engine == "shell":
         return list(task["argv"])
     if engine == "dsh":
-        bridge = Path.home() / "hermes-fleet" / "dsh-bridge" / "hermes_dsh_bridge.py"
+        bridge_root = Path(os.environ.get("HERMES_FLEET_ROOT", Path(__file__).resolve().parent.parent))
+        bridge = bridge_root / "dsh-bridge" / "hermes_dsh_bridge.py"
         last_message = project_root / output_file if output_file else task_dir / "agent-last-message.txt"
         cmd = ["/opt/homebrew/bin/python3.14", str(bridge), prompt, "--out", str(last_message)]
         if task.get("preset"):
