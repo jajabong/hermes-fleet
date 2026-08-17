@@ -331,6 +331,9 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
                 "extra_args": extra_args,
                 "rollback_on_fail": rollback_on_fail,
                 "verification_command": (raw.get("verification_command") or "").strip() or None,
+                "preset": raw.get("preset"),
+                "provider": raw.get("provider"),
+                "model": raw.get("model"),
             })
 
     ids = {t["id"] for t in normalized_tasks}
