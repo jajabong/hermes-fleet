@@ -26,6 +26,7 @@ from pathlib import Path
 PLAN_VERSION = "1"
 FINDING_FINGERPRINT_VERSION = "1"
 CHECKPOINT_INTERVAL_SECONDS = 3600
+ESCALATE_SAME_FINDING = 2
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 RISK_LEVELS = {"LOW", "MEDIUM", "HIGH"}
 ENGINES = {"shell", "dsh", "auto"}
@@ -666,6 +667,9 @@ def _flush_status(run_dir: Path, normalized: dict, started_at: str,
         payload["last_checkpoint_at"] = last_checkpoint_at
     if last_checkpoint_mono is not None:
         payload["last_checkpoint_mono"] = last_checkpoint_mono
+    if normalized.get("needs_queen"):
+        payload["needs_queen"] = True
+        payload["escalate_reason"] = normalized.get("escalate_reason")
     write_json(run_dir / "status.json", payload)
 
 
@@ -893,6 +897,30 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
                             counters["findings"][fkey] = (
                                 int(counters["findings"].get(fkey, 0)) + 1
                             )
+                        # Auto-escalate: any dsh failure is reported to Queen.
+                        # Queen decides whether to retry with different params or
+                        # dispatch a subagent (codex/opencode/claude).
+                        if (
+                            by_id[tid]["engine"] == "dsh"
+                            and not normalized.get("needs_queen")
+                        ):
+                            reason = summary.get("error") or fkey or "unknown dsh failure"
+                            normalized["needs_queen"] = True
+                            normalized["escalate_reason"] = reason
+                            event(
+                                events_path,
+                                "escalate",
+                                tid,
+                                reason=reason,
+                                finding_key=fkey,
+                            )
+                            append_notify(
+                                run_dir,
+                                "block",
+                                task_id=tid,
+                                reason=reason,
+                                detail="dsh failure → Queen should consider subagent",
+                            )
 
                     # Feature 3: emit a checkpoint.tick event when more than
                     # CHECKPOINT_INTERVAL_SECONDS have elapsed since the last
@@ -1045,6 +1073,9 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
                 ensure_ascii=False,
             )
         )
+        if normalized.get("needs_queen"):
+            status["needs_queen"] = True
+            status["escalate_reason"] = normalized.get("escalate_reason")
         return status
     finally:
         lock.release()
