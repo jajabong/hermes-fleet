@@ -28,22 +28,17 @@ FINDING_FINGERPRINT_VERSION = "1"
 CHECKPOINT_INTERVAL_SECONDS = 3600
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 RISK_LEVELS = {"LOW", "MEDIUM", "HIGH"}
-ENGINES = {"codex", "pi", "opencode", "shell", "claude", "dsh"}
+ENGINES = {"shell", "dsh"}
 ROLES = {"implement", "research", "review", "general", "shell"}
 MODES = {"read_only", "write"}
 ON_FAILURE = {"block", "continue"}
 TIMEOUT_MIN, TIMEOUT_MAX = 30, 3600
 DEFAULT_ARTIFACT_ROOT = Path.home() / ".hermes" / "artifacts" / "queen"
 ARTIFACT_FLOOR = Path.home() / ".hermes" / "artifacts"
-FORBIDDEN_CODEX_FLAGS = (
-    "--dangerously-bypass-approvals-and-sandbox",
-    "--dangerously-bypass-hook-trust",
-)
-READONLY_TOOLS = "read,grep,find,ls"
 QUEEN_RISK_TEAM = {
-    "LOW": ["codex:write", "opencode:read"],
-    "MEDIUM": ["codex:write", "opencode:read"],
-    "HIGH": ["codex:write", "opencode:read", "pi:read"],
+    "LOW": ["dsh:write", "shell:write"],
+    "MEDIUM": ["dsh:write", "shell:write"],
+    "HIGH": ["dsh:write", "shell:write"],
 }
 
 
@@ -212,8 +207,8 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
         errors.append(f"plan.version must be {PLAN_VERSION!r}; got {plan.get('version')!r}")
 
     # Feature 5: optional top-level sandbox. Default "fs:loose" because we do NOT
-    # yet enforce it (codex build_command maps mode→-s, not plan.sandbox). The
-    # field is recorded for future enforcement via codex `-s` wiring.
+    # yet enforce it. The field is recorded for future enforcement via engine
+    # isolation. Queen should NOT trust plan.sandbox as an isolation gate.
     sandbox = plan.get("sandbox", "fs:loose")
     if not isinstance(sandbox, str) or not sandbox:
         errors.append(f"plan.sandbox must be a non-empty string; got {sandbox!r}")
@@ -267,7 +262,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
                 errors.append(f"task {tid}: execution_mode must be one of {sorted(MODES)}")
 
             requested_mode = mode
-            if role == "review" or engine == "opencode":
+            if role == "review":
                 mode = "read_only"
 
             deps = raw.get("depends_on", [])
@@ -304,10 +299,6 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
             if verify_cmd is not None and not isinstance(verify_cmd, str):
                 errors.append(f"task {tid}: verification_command must be a string (or omitted)")
                 verify_cmd = None
-            if engine == "codex" and any(x in FORBIDDEN_CODEX_FLAGS for x in extra_args):
-                errors.append(f"task {tid}: forbidden codex bypass flag")
-            if engine == "codex" and any(x == "danger-full-access" for x in extra_args):
-                errors.append(f"task {tid}: danger-full-access is forbidden")
 
             # Feature 5: optional rollback_on_fail flag (default false).
             rollback_on_fail = raw.get("rollback_on_fail", False)
@@ -359,8 +350,8 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
     normalized["risk_team"] = QUEEN_RISK_TEAM[risk_level]
     normalized["sandbox"] = sandbox
     # Print a one-liner so operators see sandbox is recorded but not enforced.
-    # codex build_command uses execution_mode→-s; plan.sandbox will be wired in
-    # a future v24+. Queen should NOT trust plan.sandbox as an isolation gate.
+    # Future v24+ may wire plan.sandbox into engine-specific isolation.
+    # Queen should NOT trust plan.sandbox as an isolation gate.
     print(f"[dispatcher] sandbox={sandbox} (recorded; not enforced — see runtime contract)")
     normalized["tasks"] = normalized_tasks
     return normalized, {t["id"]: t for t in normalized_tasks}
@@ -408,67 +399,6 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
 
     if engine == "shell":
         return list(task["argv"])
-    if engine == "codex":
-        # v28: respect plan.sandbox override for codex -s flag.
-        # Default still derived from execution_mode (workspace-write/read-only).
-        sandbox_map = {
-            "fs:strict": "workspace-write",
-            "fs:loose": "workspace-write",
-            "fs:read-only": "read-only",
-        }
-        mode_sandbox = "workspace-write" if mode == "write" else "read-only"
-        plan_sandbox = task.get("_plan_sandbox")  # injected by execute_plan from normalized
-        sandbox = sandbox_map.get(plan_sandbox, mode_sandbox) if plan_sandbox else mode_sandbox
-        last_message = project_root / output_file if output_file else task_dir / "agent-last-message.txt"
-        return [
-            "codex", "exec", "-C", str(project_root), "-s", sandbox,
-            "--skip-git-repo-check", "--ephemeral", "--json",
-            "-o", str(last_message), *task.get("extra_args", []), prompt,
-        ]
-    if engine == "pi":
-        command = [
-            "pi-anchor", "-p", "--provider", "anchor", "--model", "anchor",
-            "--mode", "json", "--no-session",
-        ]
-        if mode == "read_only":
-            command.extend(["--tools", READONLY_TOOLS])
-        else:
-            command.extend(["--tools", "read,grep,find,ls,bash,edit,write"])
-        command.extend(task.get("extra_args", []))
-        command.append(prompt)
-        return command
-    if engine == "opencode":
-        return [
-            "opencode", "run", "--format", "json", "--dir", str(project_root),
-            *task.get("extra_args", []), prompt,
-        ]
-    if engine == "claude":
-        # v2.3: route claude-code through dispatcher so QUEEN_RISK_TEAM HIGH layer
-        # and the upgrade trigger (§舰队表) can both dispatch it. Mirrors `claude -p`.
-        #
-        # Sandbox parity with codex:
-        #   fs:read-only -> --allowedTools Read,Grep,Glob,LS only (no Write/Edit/Bash)
-        #   fs:loose / fs:strict -> --add-dir project_root, no allowedTools restriction
-        #                         (claude-code has no native sandbox; --add-dir scopes FS)
-        sandbox_map = {
-            "fs:strict": "workspace-write",
-            "fs:loose": "workspace-write",
-            "fs:read-only": "read-only",
-        }
-        mode_sandbox = "workspace-write" if mode == "write" else "read-only"
-        plan_sandbox = task.get("_plan_sandbox")
-        sandbox = sandbox_map.get(plan_sandbox, mode_sandbox) if plan_sandbox else mode_sandbox
-        last_message = project_root / output_file if output_file else task_dir / "agent-last-message.txt"
-        cmd = [
-            "claude", "-p", prompt,
-            "--output-format", "json",
-        ]
-        if sandbox == "read-only":
-            cmd.extend(["--allowedTools", "Read,Grep,Glob,LS"])
-        else:
-            cmd.extend(["--add-dir", str(project_root)])
-        cmd.extend(task.get("extra_args", []))
-        return cmd
     if engine == "dsh":
         bridge = Path.home() / "hermes-fleet" / "dsh-bridge" / "hermes_dsh_bridge.py"
         last_message = project_root / output_file if output_file else task_dir / "agent-last-message.txt"
@@ -558,10 +488,10 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
         error = f"{type(exc).__name__}: {exc}"
 
     # Feature 6 (v29.2): verify-after-exit — exit 0 alone is not enough.
-    # Worker may complete with exit 0 but skip writing files (e.g. opencode
-    # auto-rejects external_directory writes; logs `permission requested`).
-    # If verification_command is provided, run it AFTER the worker subprocess
-    # and override exit_code to reflect verify result.
+    # Worker may complete with exit 0 but skip writing files (e.g. a harness
+    # that auto-rejects external writes). If verification_command is provided,
+    # run it AFTER the worker subprocess and override exit_code to reflect
+    # verify result.
     # See SOUL §Queen 架构观察 #1, #3.
     verify_cmd = task.get("verification_command")
     verify_status = "skipped"
@@ -783,11 +713,6 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
         by_id = {t["id"]: t for t in tasks}
         children = {t["id"]: [] for t in tasks}
         remaining_deps = {t["id"]: set(t["depends_on"]) for t in tasks}
-        # v28: inject plan-level sandbox so build_command can map to codex -s
-        plan_sandbox = normalized.get("sandbox")
-        if plan_sandbox:
-            for t in tasks:
-                t["_plan_sandbox"] = plan_sandbox
         for t in tasks:
             for dep in t["depends_on"]:
                 children[dep].append(t["id"])
