@@ -10,13 +10,44 @@ keyword inference in PROVIDER_MAP. Defaults to deepseek-official/deepseek-v4-fla
 import argparse
 import os
 import sys
+from pathlib import Path
+
+import yaml
 from deepseek_harness import DeepSeekHarness
 
-# Ensure API keys exist for the DSH subprocess before importing/invoking the SDK.
-# Real keys are loaded from $DSH_HOME/.credentials.yaml by the DSH runtime;
-# these setdefault calls are only a fallback for local runs and contain NO secrets.
-os.environ.setdefault('DEEPSEEK_API_KEY', '<set via $DSH_HOME/.credentials.yaml>')
-os.environ.setdefault('MINIMAX_API_KEY',   '<set via $DSH_HOME/.credentials.yaml>')
+# Provider keys live in $DSH_HOME/settings.yaml (llm-pi-ai.providers.*). The
+# bundled SDK runtime resolves DEEPSEEK_API_KEY from the launching environment,
+# so we load the key for the selected provider and inject it into env before
+# constructing the harness. No secret is hardcoded or logged here.
+DSH_HOME = Path(os.environ.get('DSH_HOME') or Path.home() / '.dsh')
+DSH_SETTINGS = DSH_HOME / 'settings.yaml'
+
+
+def load_api_key(provider: str) -> str | None:
+    """Return the apiKey for a provider from settings.yaml, or None."""
+    try:
+        data = yaml.safe_load(DSH_SETTINGS.read_text(encoding='utf-8')) or {}
+    except Exception:
+        return None
+    provider_cfg = ((data.get('llm-pi-ai') or {}).get('providers') or {}).get(provider)
+    if not isinstance(provider_cfg, dict):
+        return None
+    key = provider_cfg.get('apiKey')
+    return str(key) if isinstance(key, str) and key else None
+
+
+def inject_api_key(provider: str) -> None:
+    """Set the provider's API key env var if present in settings.yaml.
+
+    deepseek-official -> DEEPSEEK_API_KEY; anything else -> <PROVIDER>_API_KEY.
+    """
+    key = load_api_key(provider)
+    if not key:
+        return
+    if provider == 'deepseek-official':
+        os.environ['DEEPSEEK_API_KEY'] = key
+    else:
+        os.environ[f'{provider.upper().replace("-", "_")}_API_KEY'] = key
 
 # keyword -> DSH preset
 TASK_PRESET_MAP = {
@@ -84,6 +115,7 @@ class HermesStrategicLayer:
 
     def execute(self, task: str) -> str:
         plan = self.analyze_task(task)
+        inject_api_key(plan['provider'])
         print(f'[Hermes] preset={plan["preset"]} provider={plan["provider"]} model={plan["model"]}',
               file=sys.stderr)
         with DeepSeekHarness(
