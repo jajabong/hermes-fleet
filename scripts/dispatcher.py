@@ -1033,6 +1033,9 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
             status["last_checkpoint_at"] = last_checkpoint_at
         if _last_checkpoint_mono is not None:
             status["last_checkpoint_mono"] = _last_checkpoint_mono
+        if normalized.get("needs_queen"):
+            status["needs_queen"] = True
+            status["escalate_reason"] = normalized.get("escalate_reason")
         write_json(run_dir / "status.json", status)
         (run_dir / "summary.md").write_text(
             "\n".join(
@@ -1073,9 +1076,6 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
                 ensure_ascii=False,
             )
         )
-        if normalized.get("needs_queen"):
-            status["needs_queen"] = True
-            status["escalate_reason"] = normalized.get("escalate_reason")
         return status
     finally:
         lock.release()
