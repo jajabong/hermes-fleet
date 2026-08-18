@@ -66,17 +66,7 @@ def _kanban_complete(task_id: str, summary: str) -> None:
 
 def _run(task: dict) -> dict:
     engine = task["engine"]
-    # v29.6: codex needs NO_PROXY=127.0.0.1,localhost to bypass macOS mihomo/Clash
-    # proxy (127.0.0.1:7897). Without this, codex routes /v1/responses through
-    # mihomo which returns 502 Bad Gateway. NO_PROXY is harmless on hosts
-    # without a proxy.
-    # pi-anchor requires ANCHOR_API_KEYS env var (the wrapper script uses set -u).
-    # Set a dummy value if not already in env.
     env = dict(os.environ)
-    env.setdefault("ANCHOR_API_KEYS", "dummy,test")
-    env["NO_PROXY"] = "127.0.0.1,localhost"
-    env["no_proxy"] = "127.0.0.1,localhost"
-    # shell task uses argv, not goal; default goal="" so _build_cmd gets empty prompt.
     goal = task.get("goal", "")
     ctx = task.get("context", "")
     workdir = task.get("workdir", ".")

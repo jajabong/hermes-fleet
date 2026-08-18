@@ -18,7 +18,7 @@ def test_engines_are_shell_and_dsh_only():
     assert ENGINES == {"shell", "dsh", "auto"}, f"unexpected engines: {ENGINES}"
 
 
-def test_validate_rejects_old_engines():
+def test_validate_rejects_unknown_engines():
     plan = {
         "version": "1",
         "run_id": "x",
@@ -27,9 +27,7 @@ def test_validate_rejects_old_engines():
         "sandbox": "fs:loose",
         "tasks": [
             {"id": "t1", "engine": "codex", "role": "general", "execution_mode": "write", "goal": "hi"},
-            {"id": "t2", "engine": "pi", "role": "general", "execution_mode": "write", "goal": "hi"},
-            {"id": "t3", "engine": "opencode", "role": "general", "execution_mode": "write", "goal": "hi"},
-            {"id": "t4", "engine": "claude", "role": "general", "execution_mode": "write", "goal": "hi"},
+            {"id": "t2", "engine": "unknown", "role": "general", "execution_mode": "write", "goal": "hi"},
         ],
     }
     try:
@@ -40,11 +38,9 @@ def test_validate_rejects_old_engines():
         assert "'dsh'" in msg
         assert "'shell'" in msg
         assert "codex" not in msg
-        assert "pi" not in msg
-        assert "opencode" not in msg
-        assert "claude" not in msg
+        assert "unknown" not in msg
         return
-    raise AssertionError("expected ValueError for removed engines")
+    raise AssertionError("expected ValueError for unknown engines")
 
 
 def test_build_command_shell():
