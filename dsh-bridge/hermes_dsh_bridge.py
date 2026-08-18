@@ -88,7 +88,7 @@ def _match_preset(task: str) -> str:
 PROVIDER_MAP = {
     'code':     ('deepseek-official', 'deepseek-v4-flash'),
     'research': ('deepseek-official', 'deepseek-v4-flash'),
-    'excel':    ('minimax',           'MiniMax-M3'),
+    'excel':    ('deepseek-official', 'deepseek-v4-flash'),
     'browser':  ('deepseek-official', 'deepseek-v4-flash'),
     'writing':  ('deepseek-official', 'deepseek-v4-flash'),
     'default':  ('deepseek-official', 'deepseek-v4-flash'),
