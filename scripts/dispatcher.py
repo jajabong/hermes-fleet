@@ -43,6 +43,39 @@ QUEEN_RISK_TEAM = {
 }
 
 
+def _dsh_plugin_capabilities() -> str:
+    """Return a summary of installed DSH plugins for injection into task context."""
+    env = os.environ.copy()
+    env["PATH"] = "/opt/homebrew/bin:" + env.get("PATH", "")
+    try:
+        proc = subprocess.run(
+            ["/opt/homebrew/opt/node@22/bin/node", "/opt/homebrew/bin/dsh",
+             "plugin", "list", "--profile", "web"],
+            capture_output=True, text=True, timeout=15, env=env,
+        )
+        if proc.returncode != 0:
+            return ""
+        lines = []
+        for line in proc.stdout.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("Legend:"):
+                lines.append(stripped)
+        return "\n".join(lines[:20]) if lines else ""
+    except Exception:
+        return ""
+
+
+def enrich_with_plugins(normalized: dict) -> None:
+    """Inject available DSH plugin capabilities into each task's context."""
+    caps = _dsh_plugin_capabilities()
+    if not caps:
+        return
+    for task in normalized["tasks"]:
+        existing = task.get("context", "").strip()
+        plugin_block = f"\n\n[DSH plugins available]\n{caps}\n"
+        task["context"] = (existing + plugin_block) if existing else plugin_block[2:]
+
+
 def fail(msg: str, code: int = 2) -> None:
     print(msg, file=sys.stderr)
     sys.exit(code)
@@ -712,6 +745,7 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
     try:
         if not resume and events_path.exists():
             events_path.unlink()
+        enrich_with_plugins(normalized)
         event(
             events_path,
             "run_resume" if resume else "run_start",

@@ -49,29 +49,40 @@ def inject_api_key(provider: str) -> None:
     else:
         os.environ[f'{provider.upper().replace("-", "_")}_API_KEY'] = key
 
-# keyword -> DSH preset
-TASK_PRESET_MAP = {
-    'code':        'code',
-    'refactor':    'code',
-    'debug':       'code',
-    'test':        'code',
-    'implement':   'code',
-    'review':      'code',
-    'research':    'research',
-    'search':      'research',
-    'analyze':     'research',
-    'summarize':   'research',
-    'excel':       'excel',
-    'spreadsheet': 'excel',
-    'report':      'excel',
-    'chart':       'excel',
-    'browser':     'browser',
-    'web':         'browser',
-    'screenshot':  'browser',
-    'write':       'writing',
-    'draft':       'writing',
-    'translate':   'writing',
-}
+# keyword -> DSH preset (priority order matters: first match wins)
+# Use word-boundary-ish matching to avoid path-name false positives like
+# `/tmp/plan-test` matching `test` -> `code`.
+_TASK_PRESET_RULES = [
+    ('excel',       ('excel',)),
+    ('spreadsheet', ('excel',)),
+    ('xlsx',        ('excel',)),
+    ('chart',       ('excel',)),
+    ('browser',     ('browser',)),
+    ('screenshot',  ('browser',)),
+    ('web',         ('browser',)),
+    ('research',    ('research',)),
+    ('search',      ('research',)),
+    ('summarize',   ('research',)),
+    ('analyze',     ('research',)),
+    ('implement',   ('code',)),
+    ('refactor',    ('code',)),
+    ('debug',       ('code',)),
+    ('review',      ('code',)),
+    ('write',       ('writing',)),
+    ('draft',       ('writing',)),
+    ('translate',   ('writing',)),
+    ('code',        ('code',)),
+    ('test',        ('code',)),
+]
+
+
+def _match_preset(task: str) -> str:
+    """Pick preset by keyword, preferring longer/more-specific tokens."""
+    lower = task.lower()
+    for keyword, (preset,) in _TASK_PRESET_RULES:
+        if keyword in lower:
+            return preset
+    return 'default'
 
 # preset -> (provider, model)
 PROVIDER_MAP = {
@@ -93,12 +104,7 @@ class HermesStrategicLayer:
     def analyze_task(self, task: str) -> dict:
         preset = self.override_preset
         if not preset:
-            task_lower = task.lower()
-            preset = 'default'
-            for key, val in TASK_PRESET_MAP.items():
-                if key in task_lower:
-                    preset = val
-                    break
+            preset = _match_preset(task)
 
         provider, model = (
             (self.override_provider, self.override_model)
