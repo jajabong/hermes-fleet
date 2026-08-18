@@ -108,9 +108,65 @@ def find_plugins_for_run(run_id: str | None = None) -> dict:
     }
 
 
+def _install_plugin(name: str, profile: str = "web") -> dict:
+    """Install a dsh plugin and return result."""
+    env = os.environ.copy()
+    env["PATH"] = "/opt/homebrew/bin:" + env.get("PATH", "")
+    try:
+        proc = subprocess.run(
+            ["/opt/homebrew/opt/node@22/bin/node", "/opt/homebrew/bin/dsh",
+             "plugin", "install", name, "--profile", profile],
+            capture_output=True, text=True, timeout=120, env=env,
+        )
+        ok = proc.returncode == 0 or "Packages:" in proc.stdout
+        return {
+            "name": name,
+            "ok": ok,
+            "stdout": proc.stdout[-500:],
+            "stderr": proc.stderr[-500:],
+        }
+    except Exception as exc:
+        return {"name": name, "ok": False, "error": str(exc)}
+
+
 def main() -> int:
-    run_id = sys.argv[1] if len(sys.argv) > 1 else None
+    run_id = None
+    auto_install = False
+    dry_run = False
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == "--auto-install":
+            auto_install = True
+        elif args[i] == "--dry-run":
+            dry_run = True
+        else:
+            run_id = args[i]
+        i += 1
+
     report = find_plugins_for_run(run_id)
+    if not report.get("candidates"):
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+
+    if dry_run:
+        report["dry_run"] = True
+        report["install_commands"] = [
+            f"dsh plugin install {c['name']} --profile web" for c in report["candidates"]
+        ]
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+
+    if auto_install:
+        results = []
+        for c in report["candidates"]:
+            print(f"[finder] installing {c['name']} ...", file=sys.stderr)
+            res = _install_plugin(c["name"])
+            results.append(res)
+            print(f"[finder] {'OK' if res['ok'] else 'FAIL'} {c['name']}", file=sys.stderr)
+        report["install_results"] = results
+        report["installed"] = [r["name"] for r in results if r.get("ok")]
+
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 

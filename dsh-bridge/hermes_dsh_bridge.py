@@ -71,6 +71,9 @@ _TASK_PRESET_RULES = [
     ('write',       ('writing',)),
     ('draft',       ('writing',)),
     ('translate',   ('writing',)),
+    ('ppt',         ('writing',)),
+    ('presentation',('writing',)),
+    ('slides',      ('writing',)),
     ('code',        ('code',)),
     ('test',        ('code',)),
 ]
