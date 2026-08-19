@@ -5,6 +5,16 @@ Pure-dialogue tasks (hi/analyze/plan) skip the DSH agent entirely, saving
 5-10x tokens. Provider keys come from ~/.dsh/settings.yaml (llm-pi-ai.providers).
 Lightweight tools (web_search/web_fetch/read_file/write_file/bash/list_dir/
 search_files) are available via a multi-round tool loop (--tools).
+
+Public API:
+  run_subagent(task, provider, model, system, timeout) -> dict
+  run_subagent_with_tools(task, provider, model, system, timeout) -> dict
+
+CLI:
+  python3 hermes_subagent.py "<task>" [--provider X] [--model Y] [--tools]
+                              [--system S] [--timeout N] [--out FILE] [--json]
+
+Exit codes: 0 ok, 2 missing key, 3 API error, 4 timeout.
 """
 
 import argparse
@@ -135,7 +145,7 @@ def _tool_web_search(query: str) -> str:
         text = re.sub(r"<[^>]+>", "", t).strip()
         snip = re.sub(r"<[^>]+>", "", snippets[i]).strip() if i < len(snippets) else ""
         out.append(f"{i+1}. {text} — {snip}")
-    return "\n".join(out) or "no results"
+    return "\n".join(out) or f"no results"
 
 
 def _tool_web_fetch(url: str) -> str:
@@ -206,7 +216,7 @@ def _tool_search_files(pattern: str) -> str:
                 break
     except Exception as e:
         return f"error: {e}"
-    return "\n".join(matches) if matches else "no matches"
+    return "\n".join(matches) if matches else f"no matches"
 
 
 _TOOL_HANDLERS = {

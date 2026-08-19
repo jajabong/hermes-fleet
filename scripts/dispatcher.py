@@ -36,6 +36,8 @@ ROLES = {"implement", "research", "review", "general", "shell"}
 MODES = {"read_only", "write"}
 ON_FAILURE = {"block", "continue"}
 TIMEOUT_MIN, TIMEOUT_MAX = 30, 3600
+VERIFY_TIMEOUT = 30
+STDERR_TRUNCATE = 200
 DEFAULT_ARTIFACT_ROOT = Path.home() / ".hermes" / "artifacts" / "queen"
 ARTIFACT_FLOOR = Path.home() / ".hermes" / "artifacts"
 QUEEN_RISK_TEAM = {
@@ -220,7 +222,7 @@ class RunLock:
             try:
                 self.lock_path.unlink()
             except FileNotFoundError:
-                pass
+                pass  # best-effort: race between unlink and existence check
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         self.fd = self.lock_path.open("a+", encoding="utf-8")
         try:
@@ -229,7 +231,7 @@ class RunLock:
             try:
                 self.fd.close()
             except Exception:
-                pass
+                pass  # best-effort: cleanup failure
             self.fd = None
             print(
                 f"run {run_dir.name} already running (lock held): {exc}",
@@ -245,11 +247,11 @@ class RunLock:
         try:
             fcntl.flock(self.fd.fileno(), fcntl.LOCK_UN)
         except Exception:
-            pass
+            pass  # best-effort: unlock failure
         try:
             self.fd.close()
         except Exception:
-            pass
+            pass  # best-effort: close failure
         self.fd = None
 
     def __enter__(self) -> "RunLock":
@@ -603,20 +605,20 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
                 shell=False,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=VERIFY_TIMEOUT,
             )
             if verify_proc.returncode == 0 and exit_code == 0:
                 verify_status = "passed"
             elif exit_code == 0 and verify_proc.returncode != 0:
                 # Worker exit 0 but verify failed — override to red.
                 exit_code = verify_proc.returncode
-                error = f"verify failed: {verify_proc.stderr.strip()[:200] or verify_proc.stdout.strip()[:200]}"
+                error = f"verify failed: {verify_proc.stderr.strip()[:STDERR_TRUNCATE] or verify_proc.stdout.strip()[:STDERR_TRUNCATE]}"
                 verify_status = "failed"
             else:
                 verify_status = f"worker_failed_first (verify rc={verify_proc.returncode})"
         except subprocess.TimeoutExpired:
             exit_code = 124
-            error = "verify command timed out after 30s"
+            error = f"verify command timed out after {VERIFY_TIMEOUT}s"
             verify_status = "timeout"
         except Exception as exc:
             error = f"verify exec failed: {type(exc).__name__}: {exc}"

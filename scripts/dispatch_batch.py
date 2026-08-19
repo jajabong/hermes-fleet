@@ -3,6 +3,15 @@
 
 Returns only stdout tail (<=3KB per task). Designed for hermes execute_code:
 the script's stdout enters the parent as a tool result, not the conversation.
+
+Mirrors scripts/dispatcher.py (the DAG orchestrator) for ad-hoc single-task
+dispatch -- use this when you don't need DAG scheduling or artifact persistence.
+
+Public API:
+  dispatch_batch(tasks) -> list[dict]
+    tasks: [{"id", "engine", "prompt", "argv?", "preset?", "provider?",
+             "model?", "extra_args?", "kanban_task_id?", "workdir?"}]
+    returns: [{"id", "engine", "exit", "stdout_tail", "stderr_tail"}]
 """
 import concurrent.futures as cf
 import json
@@ -41,7 +50,7 @@ def _kanban_claim(task_id: str, ttl: int = 600) -> None:
 
     Uses 'hermes kanban claim <id> --ttl <ttl>'. If the binary is missing,
     the network is down, or the task_id was never created, we just log to
-    stderr and move on — Kanban is observability, not a hard dependency.
+    stderr and move on -- Kanban is observability, not a hard dependency.
     """
     try:
         subprocess.run(
@@ -58,7 +67,7 @@ def _kanban_complete(task_id: str, summary: str) -> None:
     """Best-effort Kanban complete (v29.8). Silent on failure.
 
     Uses 'hermes kanban complete <id> --summary <text>'. See _kanban_claim
-    for failure semantics — Kanban is observability, not a hard dependency.
+    for failure semantics -- Kanban is observability, not a hard dependency.
     """
     try:
         subprocess.run(
@@ -80,7 +89,7 @@ def _run(task: dict) -> dict:
     prompt = f"{goal}\n\n{ctx}" if ctx and goal else goal
     cmd = _build_cmd(engine, prompt, task)
     # v29.8 Phase 1: auto Kanban claim (if task has kanban_task_id or 'id').
-    # Kanban is observability, not a hard dependency — failures are silent.
+    # Kanban is observability, not a hard dependency -- failures are silent.
     kanban_task_id = task.get("kanban_task_id") or task.get("id")
     if kanban_task_id:
         _kanban_claim(str(kanban_task_id))
