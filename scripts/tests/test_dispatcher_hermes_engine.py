@@ -67,13 +67,22 @@ def test_build_command_hermes_respects_extra_args():
     assert cmd[-2:] == ["--timeout", "120"]
 
 
-def test_auto_without_argv_still_routes_to_dsh():
+def test_auto_without_argv_with_plugin_keyword_still_routes_to_dsh():
     plan = _plan([
         {"id": "t1", "engine": "auto", "role": "general", "execution_mode": "read_only",
-         "goal": "ping", "extra_args": []},
+         "goal": "analyze xlsx data", "extra_args": []},
     ])
     norm, _ = validate_plan(plan, Path.home() / ".hermes" / "artifacts" / "queen")
     assert norm["tasks"][0]["engine"] == "dsh"
+
+
+def test_auto_without_argv_pure_dialogue_routes_to_hermes():
+    plan = _plan([
+        {"id": "t1", "engine": "auto", "role": "general", "execution_mode": "read_only",
+         "goal": "hi, what model are you?", "extra_args": []},
+    ])
+    norm, _ = validate_plan(plan, Path.home() / ".hermes" / "artifacts" / "queen")
+    assert norm["tasks"][0]["engine"] == "hermes"
 
 
 if __name__ == "__main__":

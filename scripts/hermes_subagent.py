@@ -326,6 +326,7 @@ def main(argv=None):
     ap.add_argument("--tools", action="store_true",
                     help="enable the lightweight tool loop")
     ap.add_argument("--json", action="store_true", help="emit JSON on stdout")
+    ap.add_argument("--out", default=None, help="also write final reply to this path")
     args = ap.parse_args(argv)
 
     if args.tools:
@@ -350,6 +351,12 @@ def main(argv=None):
         print(json.dumps(result, ensure_ascii=False))
     else:
         print(result["text"])
+        if args.out:
+            try:
+                Path(args.out).write_text(result["text"], encoding="utf-8")
+            except Exception as exc:
+                print(f"[Hermes] failed to write --out {args.out}: {exc}", file=sys.stderr)
+                return 3
     return 0
 
 

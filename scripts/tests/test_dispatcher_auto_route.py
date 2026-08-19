@@ -36,12 +36,23 @@ def test_auto_with_argv_routes_to_shell():
 def test_auto_without_argv_routes_to_dsh():
     plan = _plan([
         {"id": "t1", "engine": "auto", "role": "general", "execution_mode": "read_only",
-         "goal": "ping", "extra_args": []},
+         "goal": "analyze xlsx data", "extra_args": []},
     ])
     norm, _ = validate_plan(plan, Path.home() / ".hermes" / "artifacts" / "queen")
     assert norm["tasks"][0]["engine"] == "dsh"
     cmd = build_command(norm["tasks"][0], Path("/tmp"), Path("/tmp/run/t1"))
     assert "hermes_dsh_bridge.py" in cmd[1]
+
+
+def test_auto_without_argv_pure_dialogue_routes_to_hermes():
+    plan = _plan([
+        {"id": "t1", "engine": "auto", "role": "general", "execution_mode": "read_only",
+         "goal": "hi, what model are you?", "extra_args": []},
+    ])
+    norm, _ = validate_plan(plan, Path.home() / ".hermes" / "artifacts" / "queen")
+    assert norm["tasks"][0]["engine"] == "hermes"
+    cmd = build_command(norm["tasks"][0], Path("/tmp"), Path("/tmp/run/t1"))
+    assert "hermes_subagent.py" in cmd[1]
 
 
 def test_missing_engine_with_argv_routes_to_shell():
@@ -56,7 +67,7 @@ def test_missing_engine_with_argv_routes_to_shell():
 def test_missing_engine_without_argv_routes_to_dsh():
     plan = _plan([
         {"id": "t1", "role": "general", "execution_mode": "read_only",
-         "goal": "hi", "extra_args": []},
+         "goal": "analyze xlsx data", "extra_args": []},
     ])
     norm, _ = validate_plan(plan, Path.home() / ".hermes" / "artifacts" / "queen")
     assert norm["tasks"][0]["engine"] == "dsh"
@@ -90,7 +101,7 @@ def test_auto_dag_runs_correctly():
         {"id": "a", "engine": "auto", "role": "shell", "execution_mode": "write",
          "goal": "", "argv": ["echo", "a"], "extra_args": []},
         {"id": "b", "engine": "auto", "role": "general", "execution_mode": "read_only",
-         "goal": "reply ok", "depends_on": ["a"], "extra_args": []},
+         "goal": "analyze xlsx report", "depends_on": ["a"], "extra_args": []},
     ])
     norm, _ = validate_plan(plan, Path.home() / ".hermes" / "artifacts" / "queen")
     assert norm["tasks"][0]["engine"] == "shell"

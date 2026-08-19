@@ -333,7 +333,16 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
             # otherwise default to dsh (deep tactical runtime with plugins/tools).
             resolved_engine = engine
             if not resolved_engine or resolved_engine == "auto":
-                resolved_engine = "shell" if raw.get("argv") else "dsh"
+                if raw.get("argv"):
+                    resolved_engine = "shell"
+                else:
+                    text = (str(raw.get("goal", "")) + " " + str(raw.get("context", ""))).lower()
+                    has_plugin_keyword = any(
+                        kw in text
+                        for kws in PLUGIN_KEYWORD_MAP.values()
+                        for kw in kws
+                    )
+                    resolved_engine = "dsh" if has_plugin_keyword else "hermes"
 
             deps = raw.get("depends_on", [])
             if not isinstance(deps, list) or not all(isinstance(x, str) for x in deps):
@@ -493,6 +502,11 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
             cmd.extend(["--model", str(task["model"])])
         if task.get("use_tools"):
             cmd.append("--tools")
+        if output_file:
+            last_message = project_root / output_file
+        else:
+            last_message = task_dir / "agent-last-message.txt"
+        cmd.extend(["--out", str(last_message)])
         cmd.extend(task.get("extra_args", []))
         return cmd
     raise ValueError(f"unsupported engine: {engine}")
