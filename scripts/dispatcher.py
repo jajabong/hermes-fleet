@@ -29,7 +29,7 @@ CHECKPOINT_INTERVAL_SECONDS = 3600
 ESCALATE_SAME_FINDING = 2
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 RISK_LEVELS = {"LOW", "MEDIUM", "HIGH"}
-ENGINES = {"shell", "dsh", "auto"}
+ENGINES = {"shell", "dsh", "hermes", "auto"}
 ROLES = {"implement", "research", "review", "general", "shell"}
 MODES = {"read_only", "write"}
 ON_FAILURE = {"block", "continue"}
@@ -395,6 +395,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
                 "preset": raw.get("preset"),
                 "provider": raw.get("provider"),
                 "model": raw.get("model"),
+                "use_tools": bool(raw.get("use_tools", False)),
             })
 
     ids = {t["id"] for t in normalized_tasks}
@@ -480,6 +481,18 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
             cmd.extend(["--provider", str(task["provider"])])
         if task.get("model"):
             cmd.extend(["--model", str(task["model"])])
+        cmd.extend(task.get("extra_args", []))
+        return cmd
+    if engine == "hermes":
+        fleet_root = Path(os.environ.get("HERMES_FLEET_ROOT", Path(__file__).resolve().parent.parent))
+        subagent = fleet_root / "scripts" / "hermes_subagent.py"
+        cmd = ["/opt/homebrew/bin/python3.14", str(subagent), prompt]
+        if task.get("provider"):
+            cmd.extend(["--provider", str(task["provider"])])
+        if task.get("model"):
+            cmd.extend(["--model", str(task["model"])])
+        if task.get("use_tools"):
+            cmd.append("--tools")
         cmd.extend(task.get("extra_args", []))
         return cmd
     raise ValueError(f"unsupported engine: {engine}")

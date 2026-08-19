@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Queen-mode programmatic dispatch to shell/dsh.
+"""Queen-mode programmatic dispatch to shell/dsh/hermes.
 
 Returns only stdout tail (<=3KB per task). Designed for hermes execute_code:
 the script's stdout enters the parent as a tool result, not the conversation.
@@ -23,6 +23,13 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
         bridge = Path.home() / "hermes-fleet" / "dsh-bridge" / "hermes_dsh_bridge.py"
         cmd = ["/opt/homebrew/bin/python3.14", str(bridge), prompt]
         for flag, key in (("--preset", "preset"), ("--provider", "provider"), ("--model", "model")):
+            if task.get(key):
+                cmd.extend([flag, str(task[key])])
+        return cmd
+    if engine == "hermes":
+        subagent = Path.home() / "hermes-fleet" / "scripts" / "hermes_subagent.py"
+        cmd = ["/opt/homebrew/bin/python3.14", str(subagent), prompt]
+        for flag, key in (("--provider", "provider"), ("--model", "model")):
             if task.get(key):
                 cmd.extend([flag, str(task[key])])
         return cmd

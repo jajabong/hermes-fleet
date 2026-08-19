@@ -15,7 +15,7 @@ from dispatcher import validate_plan, build_command, execute_plan, ENGINES, ON_F
 
 
 def test_engines_are_shell_and_dsh_only():
-    assert ENGINES == {"shell", "dsh", "auto"}, f"unexpected engines: {ENGINES}"
+    assert ENGINES == {"shell", "dsh", "hermes", "auto"}, f"unexpected engines: {ENGINES}"
 
 
 def test_validate_rejects_unknown_engines():
