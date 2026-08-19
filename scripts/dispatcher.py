@@ -15,6 +15,7 @@ import os
 import queue
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import threading
@@ -25,6 +26,10 @@ from pathlib import Path
 
 PLAN_VERSION = "1"
 FINDING_FINGERPRINT_VERSION = "1"
+HERMES_PYTHON = os.environ.get("HERMES_PYTHON", "/opt/homebrew/bin/python3.14")
+HERMES_DSH = os.environ.get("HERMES_DSH", "/opt/homebrew/bin/dsh")
+HERMES_NODE = os.environ.get("HERMES_NODE", "/opt/homebrew/opt/node@22/bin/node")
+
 CHECKPOINT_INTERVAL_SECONDS = 3600
 ESCALATE_SAME_FINDING = 2
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -37,9 +42,9 @@ TIMEOUT_MIN, TIMEOUT_MAX = 30, 3600
 DEFAULT_ARTIFACT_ROOT = Path.home() / ".hermes" / "artifacts" / "queen"
 ARTIFACT_FLOOR = Path.home() / ".hermes" / "artifacts"
 QUEEN_RISK_TEAM = {
-    "LOW": ["dsh:write", "shell:write"],
-    "MEDIUM": ["dsh:write", "shell:write"],
-    "HIGH": ["dsh:write", "shell:write"],
+    "LOW": ["hermes:write"],
+    "MEDIUM": ["hermes:write", "shell:write"],
+    "HIGH": ["hermes:write", "dsh:write", "shell:write"],
 }
 PLUGIN_KEYWORD_MAP: dict[str, tuple[str, ...]] = {
     "dsh-excel-chat": ("excel", "xlsx", "spreadsheet", "chart"),
@@ -61,7 +66,7 @@ def _dsh_plugin_capabilities() -> str:
     env["PATH"] = "/opt/homebrew/bin:" + env.get("PATH", "")
     try:
         proc = subprocess.run(
-            ["/opt/homebrew/opt/node@22/bin/node", "/opt/homebrew/bin/dsh",
+            [HERMES_NODE, HERMES_DSH,
              "plugin", "list", "--profile", "web"],
             capture_output=True, text=True, timeout=15, env=env,
         )
@@ -483,7 +488,7 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
         bridge_root = Path(os.environ.get("HERMES_FLEET_ROOT", Path(__file__).resolve().parent.parent))
         bridge = bridge_root / "dsh-bridge" / "hermes_dsh_bridge.py"
         last_message = project_root / output_file if output_file else task_dir / "agent-last-message.txt"
-        cmd = ["/opt/homebrew/bin/python3.14", str(bridge), prompt, "--out", str(last_message)]
+        cmd = [HERMES_PYTHON, str(bridge), prompt, "--out", str(last_message)]
         if task.get("preset"):
             cmd.extend(["--preset", str(task["preset"])])
         if task.get("provider"):
@@ -495,7 +500,7 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
     if engine == "hermes":
         fleet_root = Path(os.environ.get("HERMES_FLEET_ROOT", Path(__file__).resolve().parent.parent))
         subagent = fleet_root / "scripts" / "hermes_subagent.py"
-        cmd = ["/opt/homebrew/bin/python3.14", str(subagent), prompt]
+        cmd = [HERMES_PYTHON, str(subagent), prompt]
         if task.get("provider"):
             cmd.extend(["--provider", str(task["provider"])])
         if task.get("model"):
@@ -596,9 +601,9 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
     if verify_cmd:
         try:
             verify_proc = subprocess.run(
-                verify_cmd,
+                shlex.split(verify_cmd),
                 cwd=str(project_root),
-                shell=True,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=30,

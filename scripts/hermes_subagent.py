@@ -170,7 +170,7 @@ def _tool_write_file(path: str, content: str) -> str:
 
 def _tool_bash(cmd: str) -> str:
     try:
-        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+        proc = subprocess.run(["/bin/sh", "-c", cmd], shell=False, capture_output=True, text=True,
                               timeout=MAX_BASH_SECONDS)
     except subprocess.TimeoutExpired:
         return f"error: timed out after {MAX_BASH_SECONDS}s"

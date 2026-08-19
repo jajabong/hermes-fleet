@@ -114,7 +114,8 @@ def _install_plugin(name: str, profile: str = "web") -> dict:
     env["PATH"] = "/opt/homebrew/bin:" + env.get("PATH", "")
     try:
         proc = subprocess.run(
-            ["/opt/homebrew/opt/node@22/bin/node", "/opt/homebrew/bin/dsh",
+            [os.environ.get("HERMES_NODE", "/opt/homebrew/opt/node@22/bin/node"),
+             os.environ.get("HERMES_DSH", "/opt/homebrew/bin/dsh"),
              "plugin", "install", name, "--profile", profile],
             capture_output=True, text=True, timeout=120, env=env,
         )

@@ -21,14 +21,14 @@ def _build_cmd(engine: str, prompt: str, task: dict) -> list:
         return list(task.get("argv", []))
     if engine == "dsh":
         bridge = Path.home() / "hermes-fleet" / "dsh-bridge" / "hermes_dsh_bridge.py"
-        cmd = ["/opt/homebrew/bin/python3.14", str(bridge), prompt]
+        cmd = [os.environ.get("HERMES_PYTHON", "/opt/homebrew/bin/python3.14"), str(bridge), prompt]
         for flag, key in (("--preset", "preset"), ("--provider", "provider"), ("--model", "model")):
             if task.get(key):
                 cmd.extend([flag, str(task[key])])
         return cmd
     if engine == "hermes":
         subagent = Path.home() / "hermes-fleet" / "scripts" / "hermes_subagent.py"
-        cmd = ["/opt/homebrew/bin/python3.14", str(subagent), prompt]
+        cmd = [os.environ.get("HERMES_PYTHON", "/opt/homebrew/bin/python3.14"), str(subagent), prompt]
         for flag, key in (("--provider", "provider"), ("--model", "model")):
             if task.get(key):
                 cmd.extend([flag, str(task[key])])
