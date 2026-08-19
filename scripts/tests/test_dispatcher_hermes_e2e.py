@@ -2,16 +2,13 @@
 """End-to-end test for hermes engine via execute_plan + fake subagent."""
 from __future__ import annotations
 
-import json
 import os
-import shutil
 import subprocess
 import sys
 import uuid
 from pathlib import Path
 
-sys.path.insert(0, "/Users/henry/scratch/hermes-fleet/scripts")
-
+from conftest import ARTIFACT_ROOT
 from dispatcher import validate_plan, execute_plan
 
 
@@ -73,7 +70,7 @@ def test_hermes_e2e_explicit_engine_writes_output_file(tmp_path, monkeypatch):
     fake_root = tmp_path / "fake-fleet"
     _write_fake_subagent(fake_root)
     monkeypatch.setenv("HERMES_FLEET_ROOT", str(fake_root))
-    artifact_root = Path.home() / ".hermes" / "artifacts" / "queen"
+    artifact_root = ARTIFACT_ROOT
     artifact_root.mkdir(parents=True, exist_ok=True)
     plan = _plan(
         task_id="t1",

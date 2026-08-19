@@ -129,7 +129,7 @@ User 输入 5 类，对应不同处理：
 |---|---|---|---|---|
 | 1 | **派单还是直跑?** | 直跑 (满足"简单"判据: 单文件 <50 行 + 无跨模块 + 有现成测试) | 派单 | 派单理由不足 → 直跑, 不派 |
 | 2 | **派单理由属 7 类动机哪一类?** | 隔离 / 并行 / 重写 | 试错 | 实时 (用户在线等/流式反馈) → 不派; 跨会话 (>1h) → Kanban, 不派单次 |
-| 3 | **选哪一类 worker?** | codex (写) / opencode (调研/free) / pi (精简多轮) / hermes-agent (内置 ≥2 路独立) | claude-code (升级触发器命中) | shell (零 LLM 机械检查) | 调研/写代码颠倒 → 派错 |
+| 3 | **选哪一类 worker?** | codex (写) / opencode (调研/free) / pi (精简多轮) / hermes-agent (内置 ≥2 路独立) | claude-code (升级触发器命中) | shell (零 LLM 机械检查) / hermes_subagent (纯对话, 省 5-10x tokens) | 调研/写代码颠倒 → 派错 |
 | 4 | **上下文 ≤50k tokens?** | 是 → 当前 worker | 否 → claude-code (必升级, SOUL §claude-code 升级触发器 L149) | 升级触发器命中却未升级 → 不派 |
 | 5 | **隔离边界写了吗?** | workdir + writable + forbidden 三段齐 (派单 §硬规则 L4 模板) | N/A | 缺 forbidden → 不派 (worker 会自由发挥) |
 | 6 | **verify 命令可执行吗?** | task 里有 `verification_command` 且能在 worker 沙箱内跑 | N/A | verify 不可执行 → 重写或拒派 (派单 §硬规则 L4) |
@@ -263,6 +263,24 @@ Worker：短生命周期 task 默认 10min / 硬上限 60min / 3600s 留给人�
 完成（DoD）：全部必需任务 done AND 依赖闭合 AND L1 全绿 AND 无 blocker/high AND E2E 验收通过 AND 工作区无意外改动。
 
 预算：task 默认 10min / 硬上限 60min / 3600s 留给人工长 task / 同 finding 修复 ≤2 轮 / run-end replan (run_status ∈ {partial_success,failed}) / 每 1h checkpoint. 计数规则见 "轮" 定义.
+
+## hermes_subagent 引擎 (v29.21+) — dispatcher 派单新通道
+
+dispatcher 支持 `engine: "hermes"` 显式声明, 或 `engine: "auto"` 时:
+- 无 argv 且 goal 不命中 `PLUGIN_KEYWORD_MAP` → 自动路由到 hermes (省 5-10x tokens)
+- 命中插件关键字 (excel/ppt/browser/docker/db 等) → 路由到 dsh
+
+hermes_subagent 能力边界:
+- ✅ 纯对话、分析、planning (单轮 + 多轮工具调用)
+- ✅ 7 个轻量工具 (web_search/web_fetch/read_file/write_file/bash/list_dir/search_files, 30s/64KB/1MB 限制)
+- ❌ 复杂工具 (Excel/PPT/Browser/Docker/Vision/OCR/Email) → 委派 DSH
+
+调用方式:
+- 直接: `python3 scripts/hermes_subagent.py "<task>" [--provider X] [--model Y] [--tools]`
+- 派单: `engine: "hermes"` in plan.json → dispatcher spawn 子进程
+- 退出码: 0 ok / 2 missing key / 3 API error / 4 timeout
+
+详见 `scripts/hermes_subagent.py` 文档 + `README.md` §引擎架构。
 
 ## Hermes 工具速查 (v29.5) — Queen 可直接调的 hermes 命令
 

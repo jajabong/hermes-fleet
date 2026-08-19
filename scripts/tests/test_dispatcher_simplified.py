@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import tempfile
 import uuid
 from pathlib import Path
 
-sys.path.insert(0, "/Users/henry/scratch/hermes-fleet/scripts")
-
+from conftest import ARTIFACT_ROOT, make_plan
 from dispatcher import validate_plan, build_command, execute_plan, ENGINES, ON_FAILURE
 
 
@@ -19,19 +17,12 @@ def test_engines_are_shell_and_dsh_only():
 
 
 def test_validate_rejects_unknown_engines():
-    plan = {
-        "version": "1",
-        "run_id": "x",
-        "project_root": "/tmp",
-        "risk_level": "LOW",
-        "sandbox": "fs:loose",
-        "tasks": [
-            {"id": "t1", "engine": "codex", "role": "general", "execution_mode": "write", "goal": "hi"},
-            {"id": "t2", "engine": "unknown", "role": "general", "execution_mode": "write", "goal": "hi"},
-        ],
-    }
+    plan = make_plan([
+        {"id": "t1", "engine": "codex", "role": "general", "execution_mode": "write", "goal": "hi"},
+        {"id": "t2", "engine": "unknown", "role": "general", "execution_mode": "write", "goal": "hi"},
+    ], "invalid")
     try:
-        validate_plan(plan, Path.home() / ".hermes" / "artifacts" / "queen")
+        validate_plan(plan, ARTIFACT_ROOT)
     except ValueError as exc:
         msg = str(exc)
         assert "engine must be one of" in msg
@@ -72,19 +63,12 @@ def test_build_command_dsh_with_routing():
 def test_dry_run_outputs_plan():
     with tempfile.TemporaryDirectory() as td:
         artifact_root = Path.home() / ".hermes" / "artifacts" / f"queen-test-{uuid.uuid4().hex[:8]}"
-        plan = {
-            "version": "1",
-            "run_id": "dry-" + uuid.uuid4().hex[:8],
-            "project_root": "/tmp",
-            "risk_level": "LOW",
-            "sandbox": "fs:loose",
-            "tasks": [
+        plan = make_plan([
             {"id": "a", "engine": "shell", "role": "shell", "execution_mode": "write",
              "goal": "", "context": "", "argv": ["echo", "a"], "extra_args": []},
-                {"id": "b", "engine": "dsh", "role": "general", "execution_mode": "read_only",
-                 "goal": "hi", "extra_args": []},
-            ],
-        }
+            {"id": "b", "engine": "dsh", "role": "general", "execution_mode": "read_only",
+             "goal": "hi", "extra_args": []},
+        ], "dry")
         norm, by_id = validate_plan(plan, artifact_root)
         status = execute_plan(norm, max_concurrency=2, dry_run=True)
         assert status["run_status"] == "dry_run"
@@ -96,19 +80,12 @@ def test_dry_run_outputs_plan():
 def test_dag_block_on_failure():
     with tempfile.TemporaryDirectory() as td:
         artifact_root = Path.home() / ".hermes" / "artifacts" / f"queen-test-{uuid.uuid4().hex[:8]}"
-        plan = {
-            "version": "1",
-            "run_id": "block-" + uuid.uuid4().hex[:8],
-            "project_root": "/tmp",
-            "risk_level": "LOW",
-            "sandbox": "fs:loose",
-            "tasks": [
-                {"id": "fail", "engine": "shell", "role": "shell", "execution_mode": "write",
-                 "goal": "", "context": "", "argv": ["false"], "verification_command": "false", "on_failure": "block", "extra_args": []},
-                {"id": "child", "engine": "shell", "role": "shell", "execution_mode": "write",
-                 "goal": "", "context": "", "depends_on": ["fail"], "argv": ["echo", "x"], "extra_args": []},
-            ],
-        }
+        plan = make_plan([
+            {"id": "fail", "engine": "shell", "role": "shell", "execution_mode": "write",
+             "goal": "", "context": "", "argv": ["false"], "verification_command": "false", "on_failure": "block", "extra_args": []},
+            {"id": "child", "engine": "shell", "role": "shell", "execution_mode": "write",
+             "goal": "", "context": "", "depends_on": ["fail"], "argv": ["echo", "x"], "extra_args": []},
+        ], "block")
         norm, _ = validate_plan(plan, artifact_root)
         status = execute_plan(norm, max_concurrency=2)
         summaries = {s["id"]: s for s in status["task_summaries"]}
@@ -120,19 +97,12 @@ def test_dag_block_on_failure():
 def test_on_failure_continue_allows_sibling():
     with tempfile.TemporaryDirectory() as td:
         artifact_root = Path.home() / ".hermes" / "artifacts" / f"queen-test-{uuid.uuid4().hex[:8]}"
-        plan = {
-            "version": "1",
-            "run_id": "continue-" + uuid.uuid4().hex[:8],
-            "project_root": "/tmp",
-            "risk_level": "LOW",
-            "sandbox": "fs:loose",
-            "tasks": [
-                {"id": "fail", "engine": "shell", "role": "shell", "execution_mode": "write",
-                 "goal": "", "context": "", "argv": ["false"], "on_failure": "continue", "extra_args": []},
-                {"id": "ok", "engine": "shell", "role": "shell", "execution_mode": "write",
-                 "goal": "", "context": "", "argv": ["echo", "ok"], "extra_args": []},
-            ],
-        }
+        plan = make_plan([
+            {"id": "fail", "engine": "shell", "role": "shell", "execution_mode": "write",
+             "goal": "", "context": "", "argv": ["false"], "on_failure": "continue", "extra_args": []},
+            {"id": "ok", "engine": "shell", "role": "shell", "execution_mode": "write",
+             "goal": "", "context": "", "argv": ["echo", "ok"], "extra_args": []},
+        ], "continue")
         norm, _ = validate_plan(plan, artifact_root)
         status = execute_plan(norm, max_concurrency=2)
         summaries = {s["id"]: s for s in status["task_summaries"]}
