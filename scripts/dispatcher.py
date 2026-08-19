@@ -41,6 +41,18 @@ QUEEN_RISK_TEAM = {
     "MEDIUM": ["dsh:write", "shell:write"],
     "HIGH": ["dsh:write", "shell:write"],
 }
+PLUGIN_KEYWORD_MAP: dict[str, tuple[str, ...]] = {
+    "dsh-excel-chat": ("excel", "xlsx", "spreadsheet", "chart"),
+    "dsh-ppt": ("ppt", "presentation", "slides"),
+    "dsh-browser": ("browser", "screenshot", "web"),
+    "dsh-doc": ("doc", "document", "pdf"),
+    "dsh-doc-share": ("share", "export", "report"),
+    "dsh-vision-router": ("image", "photo", "screenshot", "ocr"),
+    "dsh-email": ("email", "mail", "smtp", "imap"),
+    "dsh-docker": ("docker", "container", "k8s", "kubernetes"),
+    "dsh-data-agent": ("database", "sql", "postgres", "mysql", "query"),
+    "dsh-mneme": ("memory", "recall", "history"),
+}
 
 
 def _dsh_plugin_capabilities() -> str:
@@ -65,14 +77,32 @@ def _dsh_plugin_capabilities() -> str:
         return ""
 
 
+def _match_plugins(task: str, all_plugins: list[str]) -> list[str]:
+    """Return plugins whose keywords appear in the task text, in input order."""
+    lowered = task.lower()
+    matched = []
+    for name in all_plugins:
+        keywords = PLUGIN_KEYWORD_MAP.get(name)
+        if keywords and any(kw in lowered for kw in keywords):
+            matched.append(name)
+    return matched
+
+
 def enrich_with_plugins(normalized: dict) -> None:
     """Inject available DSH plugin capabilities into each task's context."""
     caps = _dsh_plugin_capabilities()
     if not caps:
         return
+    plugin_names = [line.split()[0] for line in caps.splitlines() if line.split()]
     for task in normalized["tasks"]:
         existing = task.get("context", "").strip()
-        plugin_block = f"\n\n[DSH plugins available]\n{caps}\n"
+        text = task.get("goal", "") + " " + task.get("context", "")
+        matched = _match_plugins(text, plugin_names)
+        if matched:
+            lines = [line for line in caps.splitlines() if line.split()[0] in matched]
+            plugin_block = f"\n\n[DSH plugins available (on-demand)]\n" + "\n".join(lines) + "\n"
+        else:
+            plugin_block = f"\n\n[warn] no keyword match, injecting all plugins\n{caps}\n"
         task["context"] = (existing + plugin_block) if existing else plugin_block[2:]
 
 
