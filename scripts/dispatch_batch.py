@@ -26,6 +26,7 @@ TIMEOUT_S = 600
 
 
 def _build_cmd(engine: str, prompt: str, task: dict) -> list:
+    """Build argv list for one task. engine in {shell, dsh, hermes}."""
     if engine == "shell":
         return list(task.get("argv", []))
     if engine == "dsh":
@@ -81,6 +82,7 @@ def _kanban_complete(task_id: str, summary: str) -> None:
 
 
 def _run(task: dict) -> dict:
+    """Execute one task: build cmd, run subprocess, capture tail. Best-effort Kanban claim."""
     engine = task["engine"]
     env = dict(os.environ)
     goal = task.get("goal", "")
@@ -136,6 +138,7 @@ def _run(task: dict) -> dict:
 
 
 def dispatch_batch(tasks):
+    """Run N tasks in parallel (ThreadPoolExecutor, max 3 workers). Return list of results."""
     if not tasks:
         return []
     max_workers = min(len(tasks), 3)

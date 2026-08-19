@@ -48,6 +48,7 @@ SYSTEM_PROMPT = (
 
 TOOL_WHITELIST = {"web_search", "web_fetch", "read_file", "write_file",
                   "bash", "list_dir", "search_files"}
+ERROR_PREFIX = "error:"
 MAX_TOOL_ROUNDS = 5
 MAX_READ_BYTES = 64 * 1024
 MAX_WRITE_BYTES = 1024 * 1024
@@ -60,11 +61,15 @@ MAX_RESPONSE_BYTES = 1 << 20
 
 
 def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: 1 token ≈ 4 chars. Min 1 to avoid zero."""
     return max(1, round(len(text) / 4))
 
 
 def _load_settings() -> dict:
-    """Minimal YAML-subset parser: indentation-nested maps and key: value."""
+    """Parse ~/.dsh/settings.yaml (minimal YAML subset) into nested dict.
+    Returns {} if file absent. Handles indentation-nested maps + key: value.
+    Lists / multi-line strings / anchors will silently fail.
+    """
     result: dict = {}
     try:
         text = DSH_SETTINGS.read_text(encoding="utf-8")
@@ -92,12 +97,14 @@ def _load_settings() -> dict:
 
 
 def _provider_cfg(provider: str) -> dict:
+    """Return provider config dict (apiKey, baseURL, models) or {}."""
     data = _load_settings()
     providers = ((data.get("llm-pi-ai") or {}).get("providers") or {}).get(provider)
     return providers if isinstance(providers, dict) else {}
 
 
 def _api_key(provider: str) -> str | None:
+    """Resolve API key: settings.yaml first, then {PROVIDER}_API_KEY env var."""
     cfg = _provider_cfg(provider)
     key = cfg.get("apiKey")
     if not key:
@@ -107,6 +114,7 @@ def _api_key(provider: str) -> str | None:
 
 
 def _chat_request(provider, model, api_key, messages, timeout):
+    """POST to OpenAI-compatible /chat/completions; return {text, tokens_in, tokens_out}."""
     cfg = _provider_cfg(provider)
     base = cfg.get("baseURL") or PROVIDER_DEFAULTS[provider][0]
     if not base:
@@ -130,6 +138,7 @@ def _chat_request(provider, model, api_key, messages, timeout):
 
 
 def _tool_web_search(query: str) -> str:
+    """DuckDuckGo HTML scrape (no API key). Top 5 results, 5KB fetch cap."""
     """DuckDuckGo HTML scrape; no API key."""
     url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
     try:
@@ -137,7 +146,7 @@ def _tool_web_search(query: str) -> str:
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read(MAX_FETCH_BYTES).decode("utf-8", "replace")
     except Exception as e:
-        return f"error: {e}"
+        return f"{ERROR_PREFIX} {e}"
     links = re.findall(r'class="result__a"[^>]*>(.*?)</a>', html)
     snippets = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', html)
     out = []
@@ -149,43 +158,47 @@ def _tool_web_search(query: str) -> str:
 
 
 def _tool_web_fetch(url: str) -> str:
+    """HTTP GET arbitrary URL, return up to 5KB text."""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.read(MAX_FETCH_BYTES).decode("utf-8", "replace")
     except Exception as e:
-        return f"error: {e}"
+        return f"{ERROR_PREFIX} {e}"
 
 
 def _tool_read_file(path: str) -> str:
+    """Read local file, capped at MAX_READ_BYTES (64KB). Returns content or error."""
     try:
         data = Path(path).read_bytes()
     except Exception as e:
-        return f"error: {e}"
+        return f"{ERROR_PREFIX} {e}"
     if len(data) > MAX_READ_BYTES:
         data = data[:MAX_READ_BYTES]
     return data.decode("utf-8", "replace")
 
 
 def _tool_write_file(path: str, content: str) -> str:
+    """Write content to local file, capped at MAX_WRITE_BYTES (1MB)."""
     data = content.encode("utf-8")
     if len(data) > MAX_WRITE_BYTES:
-        return f"error: content exceeds {MAX_WRITE_BYTES} bytes"
+        return f"{ERROR_PREFIX} content exceeds {MAX_WRITE_BYTES} bytes"
     try:
         Path(path).write_bytes(data)
         return f"wrote {len(data)} bytes to {path}"
     except Exception as e:
-        return f"error: {e}"
+        return f"{ERROR_PREFIX} {e}"
 
 
 def _tool_bash(cmd: str) -> str:
+    """Execute shell command via /bin/sh -c, timeout MAX_BASH_SECONDS (30s)."""
     try:
         proc = subprocess.run(["/bin/sh", "-c", cmd], shell=False, capture_output=True, text=True,
                               timeout=MAX_BASH_SECONDS)
     except subprocess.TimeoutExpired:
-        return f"error: timed out after {MAX_BASH_SECONDS}s"
+        return f"{ERROR_PREFIX} timed out after {MAX_BASH_SECONDS}s"
     except Exception as e:
-        return f"error: {e}"
+        return f"{ERROR_PREFIX} {e}"
     out = (proc.stdout or "").strip()
     err = (proc.stderr or "").strip()
     parts = [p for p in (out, f"stderr: {err}" if err else "") if p]
@@ -193,14 +206,16 @@ def _tool_bash(cmd: str) -> str:
 
 
 def _tool_list_dir(path: str) -> str:
+    """List directory entries, capped at MAX_LIST_ENTRIES (100)."""
     try:
         entries = sorted(Path(path).iterdir())[:MAX_LIST_ENTRIES]
     except Exception as e:
-        return f"error: {e}"
+        return f"{ERROR_PREFIX} {e}"
     return "\n".join(f"{'d' if p.is_dir() else '-'} {p.name}" for p in entries)
 
 
 def _tool_search_files(pattern: str) -> str:
+    """Recursively grep-lite by regex, capped at MAX_SEARCH_MATCHES (50)."""
     matches = []
     root = Path.cwd()
     try:
@@ -215,7 +230,7 @@ def _tool_search_files(pattern: str) -> str:
             if len(matches) >= MAX_SEARCH_MATCHES:
                 break
     except Exception as e:
-        return f"error: {e}"
+        return f"{ERROR_PREFIX} {e}"
     return "\n".join(matches) if matches else f"no matches"
 
 
@@ -231,15 +246,16 @@ _TOOL_HANDLERS = {
 
 
 def _execute_tool(name: str, arguments: dict) -> str:
+    """Dispatch a tool call (whitelist-checked) to the matching handler."""
     if name not in TOOL_WHITELIST:
-        return f"error: tool '{name}' not allowed (defer to DSH for complex tools)"
+        return f"{ERROR_PREFIX} tool '{name}' not allowed (defer to DSH for complex tools)"
     fn = _TOOL_HANDLERS[name]
     try:
         return str(fn(**arguments))
     except TypeError as e:
-        return f"error: bad arguments for {name}: {e}"
+        return f"{ERROR_PREFIX} bad arguments for {name}: {e}"
     except Exception as e:
-        return f"error: {e}"
+        return f"{ERROR_PREFIX} {e}"
 
 
 def run_subagent(

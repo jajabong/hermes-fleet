@@ -19,6 +19,7 @@ import sys
 import time
 from collections import deque
 from datetime import datetime, timezone
+from typing import Any
 from pathlib import Path
 
 PLAN_VERSION = "1"
@@ -92,7 +93,7 @@ def _match_plugins(task: str, all_plugins: list[str]) -> list[str]:
     return matched
 
 
-def enrich_with_plugins(normalized: dict) -> None:
+def enrich_with_plugins(normalized: dict[str, Any]) -> None:
     """Inject available DSH plugin capabilities into each task's context."""
     caps = _dsh_plugin_capabilities()
     if not caps:
@@ -111,11 +112,13 @@ def enrich_with_plugins(normalized: dict) -> None:
 
 
 def fail(msg: str, code: int = 2) -> None:
+    """Print msg to stderr and exit with code (default 2 = validation error)."""
     print(msg, file=sys.stderr)
     sys.exit(code)
 
 
 def now() -> str:
+    """Return current UTC timestamp as ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -172,11 +175,13 @@ def emit_replan_event(run_dir: Path, events_path: Path, reason: str) -> None:
 
 
 def write_json(path: Path, data) -> None:
+    """Write data as pretty JSON to path (creates parent dirs)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def append_jsonl(path: Path, data) -> None:
+    """Append data as one-line JSON to path (creates parent dirs)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(data, ensure_ascii=False) + "\n")
@@ -197,7 +202,7 @@ def append_notify(run_dir: Path, level: str, **fields) -> None:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def load_previous_status(run_dir: Path) -> dict:
+def load_previous_status(run_dir: Path) -> dict[str, Any]:
     """Load existing status.json from a previous run. Returns {} if absent."""
     path = run_dir / "status.json"
     if not path.exists():
@@ -262,6 +267,7 @@ class RunLock:
 
 
 def _is_under(child: Path, parent: Path) -> bool:
+    """Return True if child resolves under parent (symlinks followed)."""
     try:
         child.resolve().relative_to(parent.resolve())
         return True
@@ -269,7 +275,7 @@ def _is_under(child: Path, parent: Path) -> bool:
         return False
 
 
-def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
+def validate_plan(plan: dict[str, Any], artifact_root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     errors = []
     if plan.get("version") != PLAN_VERSION:
         errors.append(f"plan.version must be {PLAN_VERSION!r}; got {plan.get('version')!r}")
@@ -303,7 +309,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
     if not isinstance(tasks, list) or not tasks:
         errors.append("plan.tasks must be a non-empty list")
 
-    by_id: dict = {}
+    by_id: dict[str, Any] = {}
     normalized_tasks = []
     if isinstance(tasks, list):
         for i, raw in enumerate(tasks):
@@ -442,6 +448,7 @@ def validate_plan(plan: dict, artifact_root: Path) -> tuple[dict, dict]:
 
 
 def find_cycle(tasks: list[dict]) -> list[str]:
+    """Return task IDs forming a cycle (Kahn's algorithm), or [] if DAG."""
     indegree = {t["id"]: len(t["depends_on"]) for t in tasks}
     children = {t["id"]: [] for t in tasks}
     for t in tasks:
@@ -462,7 +469,8 @@ def find_cycle(tasks: list[dict]) -> list[str]:
 
 
 
-def build_prompt(task: dict) -> str:
+def build_prompt(task: dict[str, Any]) -> str:
+    """Compose worker prompt: goal + context + optional verification block."""
     goal = task["goal"].strip()
     context = task["context"].strip()
     parts = [goal]
@@ -475,7 +483,8 @@ def build_prompt(task: dict) -> str:
     return "\n\n".join(parts)
 
 
-def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
+def build_command(task: dict[str, Any], project_root: Path, task_dir: Path) -> list[str]:
+    """Return argv list to spawn for this task (one of shell/dsh/hermes)."""
     prompt = build_prompt(task)
     engine = task["engine"]
     mode = task["execution_mode"]
@@ -517,6 +526,7 @@ def build_command(task: dict, project_root: Path, task_dir: Path) -> list[str]:
 
 
 def event(events_path: Path, event_name: str, task_id: str | None = None, **extra) -> None:
+    """Append a structured event row to events.jsonl."""
     record = {"ts": now(), "event": event_name}
     if task_id is not None:
         record["task_id"] = task_id
@@ -524,7 +534,8 @@ def event(events_path: Path, event_name: str, task_id: str | None = None, **extr
     append_jsonl(events_path, record)
 
 
-def prepare_task_artifacts(task: dict, task_dir: Path, command: list[str]) -> None:
+def prepare_task_artifacts(task: dict[str, Any], task_dir: Path, command: list[str]) -> None:
+    """Create task_dir and write prompt.md, stdout/stderr.log, command.json."""
     task_dir.mkdir(parents=True, exist_ok=True)
     (task_dir / "prompt.md").write_text(build_prompt(task), encoding="utf-8")
     for name in ("stdout.log", "stderr.log"):
@@ -538,7 +549,8 @@ def prepare_task_artifacts(task: dict, task_dir: Path, command: list[str]) -> No
     })
 
 
-def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -> dict:
+def run_task(task: dict[str, Any], project_root: Path, run_dir: Path, events_path: Path) -> dict[str, Any]:
+    """Spawn one task subprocess; return summary dict. Applies timeout + verify-after-exit."""
     task_id = task["id"]
     task_dir = run_dir / "tasks" / task_id
     command = build_command(task, project_root, task_dir)
@@ -696,8 +708,9 @@ def run_task(task: dict, project_root: Path, run_dir: Path, events_path: Path) -
     }
 
 
-def mark_blocked(task: dict, project_root: Path, run_dir: Path, events_path: Path,
-                 reason: str) -> dict:
+def mark_blocked(task: dict[str, Any], project_root: Path, run_dir: Path, events_path: Path,
+                 reason: str) -> dict[str, Any]:
+    """Mark a task as blocked (failed dependency); write result.json + event."""
     task_dir = run_dir / "tasks" / task["id"]
     command = build_command(task, project_root, task_dir)
     prepare_task_artifacts(task, task_dir, command)
@@ -731,9 +744,9 @@ def mark_blocked(task: dict, project_root: Path, run_dir: Path, events_path: Pat
 
 
 
-def _flush_status(run_dir: Path, normalized: dict, started_at: str,
-                   status_map: dict, run_status_hint: str = "partial",
-                   counters: dict | None = None,
+def _flush_status(run_dir: Path, normalized: dict[str, Any], started_at: str,
+                   status_map: dict[str, Any], run_status_hint: str = "partial",
+                   counters: dict[str, Any] | None = None,
                    last_checkpoint_at: str | None = None,
                    last_checkpoint_mono: float | None = None) -> None:
     """Write status.json incrementally so a mid-run kill leaves recoverable state.
@@ -767,15 +780,16 @@ def _flush_status(run_dir: Path, normalized: dict, started_at: str,
     write_json(run_dir / "status.json", payload)
 
 
-def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
-                  resume: bool = False, force_release: bool = False) -> dict:
+def execute_plan(normalized: dict[str, Any], max_concurrency: int, dry_run: bool = False,
+                  resume: bool = False, force_release: bool = False) -> dict[str, Any]:
+    """Run the plan: Kahn DAG + ThreadPoolExecutor. Returns status dict."""
     project_root = Path(normalized["project_root"])
     run_dir = Path(normalized["artifact_root"]) / normalized["run_id"]
     run_dir.mkdir(parents=True, exist_ok=True)
     events_path = run_dir / "events.jsonl"
 
     status_path = run_dir / "status.json"
-    prior_status: dict = {}
+    prior_status: dict[str, Any] = {}
     if status_path.exists():
         if not resume:
             fail(
@@ -823,7 +837,7 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
             for dep in t["depends_on"]:
                 children[dep].append(t["id"])
 
-        status_map: dict[str, dict] = {}
+        status_map: dict[str, dict[str, Any]] = {}
 
         if resume:
             for tid, summary in prior_summaries.items():
@@ -938,7 +952,7 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
             return {"run_status": "dry_run", "task_summaries": dry_rows}
 
         write_json(run_dir / "normalized-plan.json", normalized)
-        futures: dict = {}
+        futures: dict[str, Any] = {}
 
         def launch(task_id: str) -> None:
             task = by_id[task_id]
@@ -1178,6 +1192,7 @@ def execute_plan(normalized: dict, max_concurrency: int, dry_run: bool = False,
 
 
 def parse_args(argv=None):
+    """Parse CLI args: --plan, --dry-run, --max-concurrency, --artifact-root, etc."""
     p = argparse.ArgumentParser(description="Queen-mode pure-Python DAG dispatcher")
     p.add_argument("--plan", required=True, help="Path to plan.json")
     p.add_argument("--dry-run", action="store_true", help="Validate and print argv only")
@@ -1195,6 +1210,7 @@ def parse_args(argv=None):
 
 
 def main(argv=None) -> int:
+    """CLI entry: parse args, load plan, dispatch. Exit code: 0/1/2/3/5."""
     args = parse_args(argv)
     plan_path = Path(args.plan).expanduser().resolve()
     if not plan_path.exists():
