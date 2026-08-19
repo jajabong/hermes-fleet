@@ -4,7 +4,6 @@
 Reads a plan.json, validates it, executes a Kahn-ordered DAG of tasks,
 and writes structured artifacts to disk. Stdlib only. No LLM in the loop.
 """
-from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
@@ -14,11 +13,9 @@ import json
 import os
 import queue
 import re
-import shutil
 import shlex
 import subprocess
 import sys
-import threading
 import time
 from collections import deque
 from datetime import datetime, timezone

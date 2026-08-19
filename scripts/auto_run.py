@@ -16,7 +16,6 @@ vs auto_run.py: direct execution + 0 LLM (cron friendly).
 
 Isolation: auto_run.py calls hermes CLI, does not depend on LLM, does not modify hermes-agent upstream.
 """
-from __future__ import annotations
 
 import argparse
 import json

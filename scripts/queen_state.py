@@ -15,11 +15,9 @@ Read-only. 不写 dispatcher / kanban. 不动 hermes state.
 
 参见: SOUL.md §长程执行 + §汇报唯一出口
 """
-from __future__ import annotations
 
 import argparse
 import json
-import os
 import sqlite3
 import sys
 from pathlib import Path

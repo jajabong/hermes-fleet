@@ -5,7 +5,6 @@ Reads a failed run's status.json, extracts the escalate reason, searches npm
 for candidate plugins, and prints an installation report. Does NOT auto-install;
 Queen (human or LLM) decides whether to install.
 """
-from __future__ import annotations
 
 import json
 import os
