@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -23,6 +24,13 @@ def _plan(tasks):
 
 
 def test_dsh_failure_triggers_escalate():
+    try:
+        urllib.request.urlopen("http://127.0.0.1:3080", timeout=2)
+    except Exception:
+        pass
+    else:
+        print("SKIP: dsh server is running on 127.0.0.1:3080 (test requires dsh down)")
+        return
     plan = _plan([
         {"id": "t1", "engine": "dsh", "role": "general", "execution_mode": "read_only",
          "goal": "fail task", "extra_args": []},
