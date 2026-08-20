@@ -24,3 +24,4 @@ soul-archive/
 
 # 本地备份不入仓（按需保留）
 backups/
+.hermes/
