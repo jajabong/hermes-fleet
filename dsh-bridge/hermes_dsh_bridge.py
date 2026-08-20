@@ -49,6 +49,23 @@ def inject_api_key(provider: str) -> None:
     else:
         os.environ[f'{provider.upper().replace("-", "_")}_API_KEY'] = key
 
+def load_provider_config(provider: str) -> dict:
+    """Return api_key and base_url for a provider from settings.yaml."""
+    try:
+        data = yaml.safe_load(DSH_SETTINGS.read_text(encoding='utf-8')) or {}
+    except Exception:
+        return {}
+    provider_cfg = ((data.get('llm-pi-ai') or {}).get('providers') or {}).get(provider) or {}
+    if not isinstance(provider_cfg, dict):
+        return {}
+    result: dict = {}
+    if provider_cfg.get('apiKey'):
+        result['api_key'] = str(provider_cfg['apiKey'])
+    if provider_cfg.get('baseURL'):
+        result['base_url'] = str(provider_cfg['baseURL'])
+    return result
+
+
 # keyword -> DSH preset (priority order matters: first match wins)
 # Use word-boundary-ish matching to avoid path-name false positives like
 # `/tmp/plan-test` matching `test` -> `code`.
@@ -125,15 +142,19 @@ class HermesStrategicLayer:
     def execute(self, task: str) -> str:
         plan = self.analyze_task(task)
         inject_api_key(plan['provider'])
+        provider_cfg = load_provider_config(plan['provider'])
         print(f'[Hermes] preset={plan["preset"]} provider={plan["provider"]} model={plan["model"]}',
               file=sys.stderr)
-        with DeepSeekHarness(
-            provider=plan['provider'],
+        harness = DeepSeekHarness(
+            api_key=provider_cfg.get('api_key'),
+            base_url=provider_cfg.get('base_url'),
+        )
+        result = harness.chat(
             model=plan['model'],
+            messages=[{"role": "user", "content": task}],
             max_tokens=49152,
-        ) as harness:
-            result = harness.run(task)
-        return result.final_response or ''
+        )
+        return result.get('message', {}).get('content') or ''
 
 
 def main():
