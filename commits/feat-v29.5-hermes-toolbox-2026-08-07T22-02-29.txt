@@ -43,7 +43,7 @@ index 3b9b360..27fd23b 100644
 +| `hermes mcp` | enabled | MCP server 增删 (agentmemory 已自动注册) | 加新 MCP 时 |
 +| `hermes tools enable web/x_search/video` | disabled | 调研类工具 | hermes-fleet 已有 opencode 替代, ROI 低 |
 +| `hermes session_search` / `context_engine` | disabled | 跨 session history + 大 context 处理 | 调试复杂 bug + 升级 claude-code 时 |
-+| `hermes web/portal/serve/desktop/gui/migrate/proxy` | enabled | 多渠道 (Telegram/Discord/WhatsApp/web portal/desktop) + 反向代理 | 远端 hermes-os 项目用, 本地 CLI 不需 |
++| `hermes web/portal/serve/desktop/gui/migrate/proxy` | enabled | 多渠道 (Telegram/Discord/WhatsApp/web portal/desktop) + 反向代理 | 多渠道服务用, 本地 CLI 不需 |
 +
 +**Queen 决策规则** (v29.5 起):
 +- 任务跨 session (>1h) → `hermes kanban` (持久, 重启可续) — **Queen 不能直接调, 让 main hermes session 调**
